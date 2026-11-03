@@ -24,12 +24,16 @@ export class WebDavAdapter implements StorageAdapter {
 
   constructor(private readonly options: WebDavOptions) {
     if (!this.options.endpoint.startsWith("https://")) {
-      const host = safeHost(this.options.endpoint);
-      const localOnly = host === "localhost" || host === "127.0.0.1" || host === "::1";
-      if (!localOnly || !this.options.allowInsecureHttp) {
+      // 明文 http 的放行规则（规格 16.11.4 默认要求 https）：
+      // 必须由操作者在目标上显式设 tlsVerify=false，工厂据此传 allowInsecureHttp=true，
+      // 等于在配置层面签了「我知道这条链路是明文」。
+      // 注意这是真的明文：Basic Auth 的用户名密码和备份字节都会原样过网。
+      // 之所以留这条路径，是因为存在只监听 http 的自建对象存储（如 AList 的 /dav），
+      // 一刀切拒绝会让「接外部端点」在技术上进不去；是否接受明文由配置方显式承担。
+      if (!this.options.allowInsecureHttp) {
         throw new BackupAdapterError(
           "INSECURE_WEBDAV",
-          "WebDAV 端点必须是 https（仅本机开发地址可显式放行 http）",
+          "WebDAV 端点不是 https，且没有显式设 tlsVerify=false 放行",
         );
       }
     }
@@ -185,10 +189,3 @@ export function isSameOriginTrailingSlashRedirect(location: string | null, reque
   }
 }
 
-function safeHost(url: string): string | null {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return null;
-  }
-}

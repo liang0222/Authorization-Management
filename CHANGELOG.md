@@ -78,6 +78,10 @@ Release Note、commit、迁移 ID 与回滚方式。
 - 备份策略列表新增 `scheduleText`（人类可读的调度描述）与 `nextRunAt`（下次预计执行时间）。
 - 公开文档与示例代码不再写死真实 Client ID，统一改为 `<your-client-id>` 占位符。
 
+### 新增
+
+- 备份目标新增**真正异地**的第五个目标 `offsite-webdav-remote`（`http://[OFFSITE_HOST]:5244/dav`，rootPath `/film`，prefix `ziming-license-backups`），`daily-production` 策略改为五目标 `all_required`；作业 `bkp_20261103131555_e2c918` 五份 sha256 全等 `5c521157…08f3`，并从公网独立下载该字节解密恢复（41 表 / 240 授权行对账通过）。
+
 ### 修复
 
 - **备份存储凭证解密失败**：`parseCredential()` 对已封存密文做了二次 base64，导致 GCM 校验必然失败
@@ -88,6 +92,11 @@ Release Note、commit、迁移 ID 与回滚方式。
   `…/upload/backups/offsite/backups/offsite/bkp_*.zmbk`，WebDAV 同样；连接测试的探针文件也受影响。
   现在由 `backupObjectKey()`（`src/lib/services/backup/runner.ts`）统一产出对象键，适配器只负责
   `root_path`，并补了 4 条防回归单测。
+- **WebDAV 适配器硬拒非 loopback 的 `http` 端点**：原实现要求端点必须是 https，只有 `localhost/127.0.0.1/::1`
+  才能放行 http，导致「接外部只监听 http 的自建对象存储（AList `/dav`）」在技术上进不去。改为
+  **仅在目标未显式设 `tlsVerify=false` 时拒绝**：操作者在目标配置里关掉校验，等于明确承担明文风险。
+  注意这是真的明文——Basic Auth 与备份字节都原样过网（备份体本身是 `ZMBK1` AES 加密信封，内容不泄露，
+  但用户名密码可被链路中间人截获）；要消除需给该端点配 HTTPS 后改回默认。
 - **生产环境 WebDAV 无法使用内网端点**：`allowInsecureHttp` 原先只看 `deploymentEnv`，导致显式
   `tlsVerify=false` 的内网/本机端点也被拒绝。现在 `tlsVerify=false` 即可放行，但适配器自身的
   非 loopback 明文检查仍然生效，公网 http 依旧进不来。

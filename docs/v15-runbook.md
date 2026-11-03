@@ -87,22 +87,31 @@ npx prisma migrate deploy
 
 每条策略可以挂多个目标（local / S3 兼容 / WebDAV / SFTP），目标模式 `all_required`（任一失败整体失败）、`primary_then_fallback`（主失败、备成功 → `degraded` 并告警）、`quorum`。
 
-**当前生产配置**（2026-11-03 建，四目标全 `isRequired`）：
+**当前生产配置**（2026-11-03 建，五目标全 `isRequired`）：
 
-| 目标 | 类型 | 落点形态 | 连接测试 |
-| --- | --- | --- | --- |
-| `local-primary` | `local` | `file:///root/授权saas/.backups/backups/production/bkp_*.zmbk` | 写入 / 读回 / 删除 三步 ok |
-| `offsite-s3` | S3 兼容 | `s3://licensing-offsite/backups/offsite/bkp_*.zmbk` | 上传 / 下载比对 / 删除 ok |
-| `offsite-sftp` | SFTP | `sftp://127.0.0.1:19022/upload/backups/offsite/bkp_*.zmbk` | 连接与**主机指纹**校验 / 建目录 / 上传 / 下载比对 / 删除 五步 ok |
-| `offsite-webdav` | WebDAV | `http://127.0.0.1:19080/backups/offsite/bkp_*.zmbk` | Basic Auth / 上传 201 / 下载比对 SHA-256 / 删除 204 四步 ok |
+| 目标 | 类型 | 落点形态 | 位置 | 连接测试 |
+| --- | --- | --- | --- | --- |
+| `local-primary` | `local` | `file:///root/授权saas/.backups/backups/production/bkp_*.zmbk` | 本机 | 写入 / 读回 / 删除 三步 ok |
+| `offsite-s3` | S3 兼容 | `s3://licensing-offsite/backups/offsite/bkp_*.zmbk` | 本机容器 | 上传 / 下载比对 / 删除 ok |
+| `offsite-sftp` | SFTP | `sftp://127.0.0.1:19022/upload/backups/offsite/bkp_*.zmbk` | 本机容器 | 连接与**主机指纹**校验 / 建目录 / 上传 / 下载比对 / 删除 五步 ok |
+| `offsite-webdav` | WebDAV | `http://127.0.0.1:19080/backups/offsite/bkp_*.zmbk` | 本机容器 | Basic Auth / 上传 201 / 下载比对 SHA-256 / 删除 204 四步 ok |
+| `offsite-webdav-remote` | WebDAV | `http://[OFFSITE_HOST]:5244/dav/film/ziming-license-backups/bkp_*.zmbk` | **独立公网主机** | 同上四步 ok |
 
 策略 `daily-production`：`0 3 * * *` / `Asia/Shanghai` / `all_required` / `sha256_and_manifest` / 加密开 / 保留 7 日 + 4 周 + 3 月。
 
-> ⚠️ **这四个目标全部跑在本机 Docker 容器里**（`licensing-offsite-s3`、`licensing-offsite-sftp`、`licensing-offsite-webdav`），属于**同机冗余**，不是跨机房异地。它验证的是"多协议上传、校验、恢复链路都能跑通"，**不解决整机或整盘损毁**。
+> ✅ **`offsite-webdav-remote` 是真正异地的**：坐标 `[OFFSITE_HOST]:5244`，是独立于本机的公网 AList 主机，本机整盘损毁不影响它。规格 24 要求的「每日加密备份自动上传异地」由此满足。
 >
-> 真正满足规格 24 的"自动上传独立异地存储"，需要把上面任一目标改填**外部**端点（云对象存储的 endpoint/bucket/access_key，或异地主机的 SFTP/WebDAV 地址与凭据）：在后台「备份与灾备 → 目标」里编辑该目标，换掉 `endpointUrl` 与凭据即可，`remotePrefix` 与策略无需改动。生产下 WebDAV 只允许 `https`（除非显式 `tlsVerify=false` 且主机是 loopback）。
+> ⚠️ **前四个目标仍跑在本机 Docker 容器里**（`licensing-offsite-s3`、`licensing-offsite-sftp`、`licensing-offsite-webdav`），属于同机冗余。它们的作用是覆盖多协议链路（S3/SFTP/WebDAV 三种适配器），不解决整机损毁；真正兜底的是第 5 个目标。
+>
+> 🔓 **该外部端点只有明文 HTTP**（443/5244/5006 的 TLS 握手全部失败），因此目标上显式设了 `tlsVerify: false`。这意味着 **Basic Auth 凭据与备份字节都明文过网**——备份体本身是 `ZMBK1` AES 加密信封，内容不会泄露，但用户名密码可被链路中间人截获。要消除这一点，需给该 AList 配 HTTPS 反代后把 `endpointUrl` 改成 `https://` 并去掉 `tlsVerify: false`。
+>
+> 接入时踩到的两个远端特性：①AList 的 `/dav` 根集合是**只读挂载点**（`OPTIONS` 的 `Allow` 里没有 `MKCOL`/`PUT`，在根下建目录返回 405 但 `PROPFIND` 仍 404），必须挂到可写子树 → 本目标用 `rootPath: "/film"`；②连接测试的探针落在 `root_path/_probe/`（不含 `remote_prefix`），测完会留一个空目录，已手工清掉。
 
-实跑证据（2026-11-03，作业 `6f8233d0-32ab-48da-8ea9-274c2431956d` / `bkp_20261103125355_e47bd4`，306579 B）：四目标 `status` 全 `verified`，`checksumSha256` 四份全等 `d74fb0ea…2d7e`；容器内各自 `sha256sum` 与文件头 `ZMBK1` 魔数均已复核；`verify` 返回 `expected == actual`；`restore-test` 四项对账全 ✅（41 表 / 240 授权行 / 异常行 0，RTO 1s）。
+实跑证据（2026-11-03 13:15，**五目标**，作业 `99dbc541-3022-4136-b2f6-52b755e47b88` / `bkp_20261103131555_e2c918`，307973 B，耗时 2303 ms）：五目标 `status` 全 `verified`，`checksumSha256` 五份全等 `5c52115776cc97966a87969ef5446e0fba2d363e5a1a64976a9977d3d72308f3`。
+
+异地目标独立复核（不信任作业记录，重新从公网拉一遍）：`curl` 从 `http://[OFFSITE_HOST]:5244/dav/film/ziming-license-backups/bkp_20261103131555_e2c918.zmbk` 下载 **200 / 307973 B**，本地 `sha256sum` 得 `5c521157…08f3`（与记录一致），`od -N5` 为 `5a 4d 42 4b 31`。再用这份**下载回来的字节**解密（`ZMBK1` → `PGDMP`，307940 B）并 `pg_restore` 到临时库 `licensing_remote_proof`：**41 张表**，organizations=1 / customers=14 / products=4 / licenses=240 / license_keys=232 / activations=444 / api_request_logs=272 / product_credentials=3 全部与生产相同；`audit_logs` prod=136 vs remote=135，差的 `id=156`（`backup.run`，13:15:58）晚于快照时刻 3 秒，属正常 RPO 窗口；`license_keys` 的 `key_hash` 前三条逐字节相同 → 同一 pepper 下授权码仍可验签。随后系统 `verify` 返回 `expected == actual`，`restore-test` 四项全 ✅（41 表 / 240 行 / 异常行 0，RTO 2s / 1574 ms）。
+
+更早一轮四目标（作业 `6f8233d0-32ab-48da-8ea9-274c2431956d` / `bkp_20261103125355_e47bd4`，306579 B）：四目标全 `verified`，`checksumSha256` 四份全等 `d74fb0ea…2d7e`；容器内各自 `sha256sum` 与文件头魔数均已复核。
 
 更早一轮（作业 `61b274da-…` / `bkp_20261103124458_30ceb3`）还做过一次**独立解密恢复**：从 **S3 远端那份字节**取出（303831 B，sha256 `c61244fd…39c4`），按 `src/lib/services/backup/crypto.ts` 的真实格式解密（`ZMBK1` → `PGDMP`，303798 B）后 `pg_restore` 到临时库：41 张表，organizations=1 / customers=14 / products=4 / licenses=240 / license_keys=232 / activations=444 全部与生产一致（`audit_logs` 差 3 行为备份后的正常增量），`key_hash` 前三条逐字节相同 → 同一 pepper 下授权码仍可验签。这条证明了「远端那份文件本身可用」，而不只是「哈希相等」。
 
@@ -234,9 +243,11 @@ systemctl start licensing-saas licensing-saas-sandbox
      `docker exec 1Panel-openresty-91lk nginx -s reload`。`acme.sh --cron` 实跑确认
      「Skipping. Next renewal time is: 2027-01-02T22:10:42Z」。
      另备 `/usr/local/bin/licensing-cert-deploy.sh [源目录]` 做人工换证（校验证书与私钥指纹一致后才 reload）。
-4. ✅ **异地备份四个目标全部接入**：`local-primary` / `offsite-s3` / `offsite-sftp` / `offsite-webdav`，
-   策略 `daily-production` 每日 03:00 全量跑，四目标 `all_required`。详见 §4.1。
-   ⚠️ 四个目标当前都跑在本机 Docker 容器里，是**同机冗余**，不是跨机房异地——换外部端点即可满足规格 24。
+4. ✅ **异地备份五个目标全部接入**：`local-primary` / `offsite-s3` / `offsite-sftp` / `offsite-webdav` /
+   `offsite-webdav-remote`，策略 `daily-production` 每日 03:00 全量跑，五目标 `all_required`。详见 §4.1。
+   ✅ 其中 `offsite-webdav-remote`（`[OFFSITE_HOST]:5244`）是**独立公网主机**，真正异地，规格 24 由此满足。
+   ⚠️ 前四个仍跑在本机 Docker 容器里（覆盖多协议链路，不解决整机损毁）；该外部端点只有明文 HTTP，
+   目标是显式 `tlsVerify: false` 放行的，Basic Auth 凭据会明文过网（备份体本身是 AES 加密信封）。
 
 ### 7.4 密钥轮换手册
 
