@@ -218,11 +218,25 @@ systemctl start licensing-saas licensing-saas-sandbox
    `SIGNING_KEY_DIR=.keys-prod`；启动日志 `[boot] env=production … 配置检查通过`。
    旧 pepper 留作 `LICENSE_HMAC_PEPPER_LEGACY`（版本环），旧封存密钥在重封存后已移除。
 2. ✅ `git init` + 首次提交 + tag `v1.5.0`。
-3. ✅ openresty 反代到 3100（`<你的域名>`，HTTP）。**HTTPS 待办**：需在 1Panel
-   为 `<你的域名>` 申请证书后，在 `/opt/1panel/www/conf.d/<你的域名>.conf`
-   增加 443 server 并复用同一 `location` 段。
-4. ⚠️ 每日异地备份目标仍需落到真实对象存储：本机只验证过临时容器（S3/WebDAV/SFTP 三协议均
-   `verified` + 隔离恢复演练通过），容器已删除。生产需在 `/app/settings/backups` 重新配置目标。
+3. ✅ openresty 反代到 3100，**HTTP 与 HTTPS 双通道已上线**：
+   - 证书 `CN=<你的域名>`（Let's Encrypt，`notAfter=2027-02-01`）装到
+     `/opt/1panel/apps/openresty/openresty/conf/ssl/<你的域名>/`，
+     文件名是 `fullchain.crt` 与 `tls-private.dat`（**故意不用 `.pem`/`.key` 扩展名**，nginx 只按路径读）；
+   - 443 server：`http2 on`、TLSv1.2/1.3、`ssl_session_tickets off`、HSTS `max-age=31536000`，
+     `/metrics` 在反代层直接 `deny all`；
+   - 80 server：`/.well-known/acme-challenge/` 走 webroot `/www/acme`，其余全量 `301` 到 https。
+     顺序关键——ACME 的 location 必须写在 301 之前，否则续期请求会被自己重定向掉。
+   - 实测：`openssl s_client` → `Verify return code: 0 (ok)`；`/login` 200；公网 `/metrics` 403；
+     `[同机其他站点]` 未受影响。
+   - **续期自动化**：`/etc/cron.d` 已有 acme.sh 自带的
+     `14 1,7,13,19 * * * /root/.acme.sh/acme.sh --cron`；证书配置里已写死
+     `Le_RealFullChainPath` / `Le_RealKeyPath` 指向上面两个文件，`Le_ReloadCmd` 为
+     `docker exec 1Panel-openresty-91lk nginx -s reload`。`acme.sh --cron` 实跑确认
+     「Skipping. Next renewal time is: 2027-01-02T22:10:42Z」。
+     另备 `/usr/local/bin/licensing-cert-deploy.sh [源目录]` 做人工换证（校验证书与私钥指纹一致后才 reload）。
+4. ✅ **异地备份四个目标全部接入**：`local-primary` / `offsite-s3` / `offsite-sftp` / `offsite-webdav`，
+   策略 `daily-production` 每日 03:00 全量跑，四目标 `all_required`。详见 §4.1。
+   ⚠️ 四个目标当前都跑在本机 Docker 容器里，是**同机冗余**，不是跨机房异地——换外部端点即可满足规格 24。
 
 ### 7.4 密钥轮换手册
 
