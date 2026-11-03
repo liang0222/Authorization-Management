@@ -46,13 +46,14 @@ export LICENSE_KEY_DIR=/tmp/license-keys              # 设备私钥目录，默
 | --- | --- | --- | --- |
 | `AuthenticationError` | `CLIENT_AUTH_FAILED` | 401 | `X-Client-ID` 或激活令牌不对。令牌过期就refresh，别重试同一个。 |
 | `LicenseRejectedError` | `LICENSE_INVALID`、`PRODUCT_MISMATCH` | 422 | 授权码无效，或不属于这个产品。**不要重试**，提示用户核对。 |
+| `LicenseRejectedError` | `PRODUCT_DISABLED` | 403 | 整个产品被管理员停用，该产品下所有授权同时不可用。**不要重试**，联系服务方；客户端应停用全部功能。 |
 | `LicenseExpiredError` | `LICENSE_EXPIRED`、`ACTIVATION_WINDOW_EXPIRED` | 410 | 已过期 / 首次激活窗口已过。引导续费，不是网络问题。 |
 | `LicenseSuspendedError` | `LICENSE_SUSPENDED`、`DEVICE_BLOCKED` | 423 | 被管理员暂停或本设备被封禁。提示联系客服。 |
 | `DeviceLimitError` | `DEVICE_LIMIT_EXCEEDED` | 409 | 名额用满。先解绑闲置设备，或让客户升配套餐。 |
 | `ActivationLimitError` | `ACTIVATION_LIMIT_REACHED` | 409 | 累计激活次数上限。解绑不返还次数时只能续签。 |
 | `RateLimitError` | `RATE_LIMITED` | 429 | 读 `Retry-After` 退避，别原地重试。 |
 | `ServiceDownError` | `LICENSE_SERVICE_UNAVAILABLE` | 503 | 服务端不可用。**离线宽限期**就是为这个设计的：继续用缓存的授权。 |
-| 其余落到基类 | `INVALID_REQUEST`、`FORBIDDEN`、`PRODUCT_DISABLED`、`RESOURCE_NOT_FOUND`、`LICENSE_ALREADY_BOUND`、`IDEMPOTENCY_CONFLICT`、`INTERNAL_ERROR` | 400/403/404/409/500 | 多数是接入方代码问题，把 `request_id` 记下来报给服务端。 |
+| 其余落到基类 | `INVALID_REQUEST`、`FORBIDDEN`、`RESOURCE_NOT_FOUND`、`LICENSE_ALREADY_BOUND`、`IDEMPOTENCY_CONFLICT`、`INTERNAL_ERROR` | 400/403/404/409/500 | 多数是接入方代码问题，把 `request_id` 记下来报给服务端。 |
 
 `MFA_REQUIRED`、`CSRF_FAILED`、`CONFLICT` 只出现在管理后台，SDK 不会遇到，所以不在上表。
 

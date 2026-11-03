@@ -87,7 +87,7 @@ public final class Quickstart {
     static LicenseException mapError(String code, String message, String requestId, int status) {
         return switch (code) {
             case "CLIENT_AUTH_FAILED", "FORBIDDEN" -> new AuthenticationException(code, message, requestId, status);
-            case "LICENSE_INVALID", "PRODUCT_MISMATCH" ->
+            case "LICENSE_INVALID", "PRODUCT_MISMATCH", "PRODUCT_DISABLED" ->
                 new LicenseRejectedException(code, message, requestId, status);
             case "LICENSE_EXPIRED", "ACTIVATION_WINDOW_EXPIRED" ->
                 new LicenseExpiredException(code, message, requestId, status);

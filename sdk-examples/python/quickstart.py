@@ -71,6 +71,8 @@ ERROR_MAP = {
     # 公开 API 里 FORBIDDEN 只来自凭证缺少某个 scope，属接入配置问题。
     "FORBIDDEN": AuthenticationError,
     "LICENSE_INVALID": LicenseRejectedError,
+    # 产品被停用：该产品下所有授权同时不可用，不是单张授权的问题。
+    "PRODUCT_DISABLED": LicenseRejectedError,
     "PRODUCT_MISMATCH": LicenseRejectedError,
     "LICENSE_EXPIRED": LicenseExpiredError,
     "ACTIVATION_WINDOW_EXPIRED": LicenseExpiredError,

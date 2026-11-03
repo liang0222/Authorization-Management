@@ -62,7 +62,7 @@ func newLicenseError(code, message, requestID string, status int) error {
 	switch code {
 	case "CLIENT_AUTH_FAILED", "FORBIDDEN":
 		return &AuthenticationError{base}
-	case "LICENSE_INVALID", "PRODUCT_MISMATCH":
+	case "LICENSE_INVALID", "PRODUCT_MISMATCH", "PRODUCT_DISABLED":
 		return &LicenseRejectedError{base}
 	case "LICENSE_EXPIRED", "ACTIVATION_WINDOW_EXPIRED":
 		return &LicenseExpiredError{base}

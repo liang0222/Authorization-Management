@@ -186,6 +186,7 @@ export function buildLlmsIndex(spec: OpenApiDocument = loadOpenApiDocument()): s
     "- 只重试网络错误 / 408 / 429 / 5xx；400/401/403/410/422/423 不要重试。",
     "- refresh_token 每次心跳轮换，收到新值必须先落盘。",
     "- 日志里不得出现完整授权码、令牌或签名原文。",
+    "- 列表端点用 cursor 分页：默认 20、上限 100，回传 next_cursor；has_more=false 即末页，不要解析游标。",
     "",
     "## 端点",
     "",
@@ -228,6 +229,8 @@ export function buildLlmsFull(spec: OpenApiDocument = loadOpenApiDocument()): st
     "- 写操作带 Idempotency-Key；同一 key + 同一请求体视为重试，返回原结果并加响应头 x-idempotent-replay: true。",
     "- 令牌只放 Authorization: Bearer，不放 URL，不进日志。",
     "- 连接超时 3–5 秒，读取超时 5–15 秒。",
+    "- 列表端点用 cursor 分页：limit 默认 20、上限 100；响应 page.next_cursor / page.has_more，"
+      + "has_more=false 即末页。游标已 HMAC 签名并绑定端点，只能原样回传，解析或跨端点复用会得到 400 INVALID_REQUEST。",
     "",
     "## 3. 响应信封",
     "",

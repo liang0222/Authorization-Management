@@ -111,6 +111,48 @@ activation_deadline    必须在此之前完成首次激活，否则授权作废
         </p>
       </DocsSection>
 
+      <DocsSection title="列表分页（管理 API）">
+        <p>
+          管理 API 的列表端点（授权、客户、设备、审计日志、Webhook 投递等）同时支持
+          <strong className="text-foreground">偏移分页</strong>与
+          <strong className="text-foreground">游标分页</strong>。新代码请用游标：数据量大时偏移分页会越翻越慢，
+          而且翻页过程中有新增记录会导致重复或漏行。
+        </p>
+        <CodeBlock
+          language="json"
+          filename="响应结构"
+          code={`{
+  "ok": true,
+  "code": "OK",
+  "data": {
+    "items": [ /* ... */ ],
+    "page": 1,
+    "pageSize": 20,
+    "total": 232,
+    "pageCount": 12,
+    "next_cursor": "c1.eyJvIjoyMCwicyI6Ii9hcGkv..." ,
+    "has_more": true,
+    "pagination": { "next_cursor": "c1....", "has_more": true, "limit": 20 }
+  }
+}`}
+        />
+        <ParamsTable
+          rows={[
+            { name: "limit", type: "number", required: false, description: "每页条数，默认 20，上限 100；超出按 100 处理" },
+            { name: "cursor", type: "string", required: false, description: "上一页返回的 next_cursor 原样回传；不要解析或自己拼" },
+            { name: "page / pageSize", type: "number", required: false, description: "旧式偏移分页，仍然可用；与 cursor 同时出现时以 cursor 为准" },
+          ]}
+        />
+        <p>
+          四条规则：①<code className="font-mono text-[12.5px]">has_more=false</code> 且
+          <code className="font-mono text-[12.5px]">next_cursor=null</code> 就是最后一页；
+          ②游标是 HMAC 签名的偏移量并绑定到具体端点，改一个字节或拿去打别的接口都会返回
+          <code className="font-mono text-[12.5px]"> 400 INVALID_REQUEST</code>；
+          ③游标不设过期时间，但重新请求第一页永远安全；
+          ④不要在客户端缓存游标跨会话使用。
+        </p>
+      </DocsSection>
+
       <DocsSection title="短期令牌与刷新令牌">
         <ParamsTable
           rows={[

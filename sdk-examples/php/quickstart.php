@@ -33,6 +33,8 @@ const ERROR_MAP = [
     // 公开 API 里 FORBIDDEN 只来自凭证缺少某个 scope，属接入配置问题。
     'FORBIDDEN' => AuthenticationError::class,
     'LICENSE_INVALID' => LicenseRejectedError::class,
+    // 产品被停用：该产品下所有授权同时不可用，不是单张授权的问题。
+    'PRODUCT_DISABLED' => LicenseRejectedError::class,
     'PRODUCT_MISMATCH' => LicenseRejectedError::class,
     'LICENSE_EXPIRED' => LicenseExpiredError::class,
     'ACTIVATION_WINDOW_EXPIRED' => LicenseExpiredError::class,

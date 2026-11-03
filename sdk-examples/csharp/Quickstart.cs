@@ -101,6 +101,7 @@ public class Quickstart
                 return new AuthenticationException(code, message, requestId, status);
             case "LICENSE_INVALID":
             case "PRODUCT_MISMATCH":
+            case "PRODUCT_DISABLED":
                 return new LicenseRejectedException(code, message, requestId, status);
             case "LICENSE_EXPIRED":
             case "ACTIVATION_WINDOW_EXPIRED":
