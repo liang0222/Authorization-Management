@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BadgeCheck, KeyRound, Loader2, Lock, RefreshCw, Save, ShieldCheck, Smartphone } from "lucide-react";
+import { BadgeCheck, KeyRound, Loader2, Lock, LogOut, MonitorSmartphone, RefreshCw, Save, ShieldCheck, Smartphone } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader, InfoGrid, Section } from "@/components/app/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FormError, FormField, FormHint } from "@/components/app/form-field";
 import { DetailSkeleton, ErrorState } from "@/components/app/feedback";
+import { ConfirmDialog } from "@/components/app/confirm-dialog";
 import { SecretReveal } from "@/components/app/secret-reveal";
 import { ToneBadge } from "@/components/app/status-badge";
 import { useResource } from "@/lib/client/use-resource";
@@ -27,6 +28,21 @@ interface MeResponse {
   organization: { id: string; name: string; timezone: string };
 }
 
+interface SessionRow {
+  id: string;
+  ip: string | null;
+  userAgent: string | null;
+  createdAt: string;
+  lastSeenAt: string;
+  expiresAt: string;
+  current: boolean;
+}
+
+interface SessionListResponse {
+  items: SessionRow[];
+  total: number;
+}
+
 interface MfaEnrollment {
   secret: string;
   otpauthUri: string;
@@ -36,6 +52,13 @@ interface MfaEnrollment {
 export default function ProfilePage() {
   const { session, refresh: refreshSession } = useSession();
   const { data, error, isLoading, isRefreshing, refresh } = useResource<MeResponse>("/api/v1/admin/me");
+  const {
+    data: sessions,
+    isLoading: sessionsLoading,
+    refresh: refreshSessions,
+  } = useResource<SessionListResponse>("/api/v1/admin/me/sessions");
+  const [revokeTarget, setRevokeTarget] = useState<SessionRow | null>(null);
+  const [revokeAllOpen, setRevokeAllOpen] = useState(false);
 
   const [displayName, setDisplayName] = useState("");
   const [profileSaving, setProfileSaving] = useState(false);
@@ -427,9 +450,112 @@ export default function ProfilePage() {
         )}
       </Section>
 
+      <Section
+        id="sessions"
+        title="登录会话"
+        description="列出当前账号最近 50 个未过期的登录会话；撤销后该浏览器下一次请求即失效。"
+        actions={
+          sessions && sessions.items.some((item) => !item.current) ? (
+            <Button size="sm" variant="outline" onClick={() => setRevokeAllOpen(true)}>
+              <LogOut className="size-3.5" />
+              其他设备全部下线
+            </Button>
+          ) : null
+        }
+        contentClassName="p-0"
+      >
+        {sessionsLoading && !sessions ? (
+          <div className="p-4">
+            <DetailSkeleton />
+          </div>
+        ) : !sessions || sessions.items.length === 0 ? (
+          <p className="p-4 text-sm text-muted-foreground">当前没有可显示的会话。</p>
+        ) : (
+          <ul className="divide-y divide-border">
+            {sessions.items.map((item) => (
+              <li key={item.id} className="flex flex-wrap items-center justify-between gap-3 p-4">
+                <div className="min-w-0 space-y-1">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <MonitorSmartphone className="size-3.5 text-muted-foreground" />
+                    <span className="truncate">{describeUserAgent(item.userAgent)}</span>
+                    {item.current ? <ToneBadge tone="success">当前会话</ToneBadge> : null}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    IP {item.ip ?? "未知"} · 最近活动 {formatDateTime(item.lastSeenAt)} · 到期 {formatDateTime(item.expiresAt)}
+                  </p>
+                </div>
+                {item.current ? (
+                  <span className="text-xs text-muted-foreground">退出登录即可结束</span>
+                ) : (
+                  <Button size="sm" variant="outline" onClick={() => setRevokeTarget(item)}>
+                    撤销
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+
+      <ConfirmDialog
+        open={revokeTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setRevokeTarget(null);
+        }}
+        title="撤销该会话？"
+        description={
+          revokeTarget
+            ? `${describeUserAgent(revokeTarget.userAgent)} · ${revokeTarget.ip ?? "未知 IP"}。撤销后该会话立即失效，需要重新登录。`
+            : undefined
+        }
+        confirmLabel="确认撤销"
+        onConfirm={async () => {
+          if (!revokeTarget) return;
+          await apiRequest(`/api/v1/admin/me/sessions/${revokeTarget.id}`, { method: "DELETE" });
+          toast.success("会话已撤销");
+          setRevokeTarget(null);
+          refreshSessions();
+        }}
+      />
+
+      <ConfirmDialog
+        open={revokeAllOpen}
+        onOpenChange={setRevokeAllOpen}
+        title="其他设备全部下线？"
+        description="只保留当前浏览器，其余会话立即失效。该操作会写入操作审计（user.revoke_sessions）。"
+        confirmLabel="全部下线"
+        onConfirm={async () => {
+          const result = await apiRequest<{ revoked: number }>("/api/v1/admin/me/sessions", { method: "DELETE" });
+          toast.success(`已撤销 ${result.revoked} 个会话`);
+          setRevokeAllOpen(false);
+          refreshSessions();
+        }}
+      />
+
       <FormHint>
         当前登录：{session?.user.email ?? data?.email ?? ""}。所有安全相关操作都会写入操作审计（user.update_profile / user.change_password / user.mfa_enabled / user.mfa_disabled）。
       </FormHint>
     </div>
   );
+}
+
+/** 把 UA 压成一句人话：只取浏览器与系统两段，避免表格里出现几十个字符的原始 UA。 */
+function describeUserAgent(userAgent: string | null): string {
+  if (!userAgent) return "未知客户端";
+  const browser =
+    /Edg\//.test(userAgent) ? "Edge"
+    : /Chrome\//.test(userAgent) ? "Chrome"
+    : /Safari\//.test(userAgent) && !/Chrome/.test(userAgent) ? "Safari"
+    : /Firefox\//.test(userAgent) ? "Firefox"
+    : /curl\//i.test(userAgent) ? "curl"
+    : /node/i.test(userAgent) ? "Node"
+    : "其他客户端";
+  const os =
+    /Windows NT/.test(userAgent) ? "Windows"
+    : /Mac OS X/.test(userAgent) ? "macOS"
+    : /Android/.test(userAgent) ? "Android"
+    : /(iPhone|iPad)/.test(userAgent) ? "iOS"
+    : /Linux/.test(userAgent) ? "Linux"
+    : null;
+  return os ? `${browser} · ${os}` : browser;
 }
