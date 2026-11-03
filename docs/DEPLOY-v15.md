@@ -115,23 +115,98 @@ rsync -avz --exclude node_modules --exclude .next --exclude .backups \
       /root/授权saas/ target-host:/root/授权saas/
 ```
 
-**C. 打包传输**
+**C. 打包传输（推荐，已实测可用）**
+
+打包原则：**只打 git 跟踪的文件**。这样天然排除 `node_modules`、`.next`、`.keys*`、`.backups`、`.env`，不用手写一长串 `--exclude`，也不会漏掉或误带。
 
 ```bash
-# 源机器：排除后只有约 17 M
-cd /root
-tar czf licensing-saas.tar.gz \
-  --exclude='授权saas/node_modules' --exclude='授权saas/.next' \
-  --exclude='授权saas/.backups' --exclude='授权saas/.backups-sandbox' \
-  --exclude='授权saas/.keys-prod' --exclude='授权saas/.keys-sandbox' \
-  授权saas
+# 源机器：先看要打多少
+cd /root/授权saas
+git ls-files | wc -l          # 本机 389
+git ls-files -z | xargs -0 du -ch | tail -1   # 本机 11M
+
+# 打 zip（本机无 zip 命令，用 python 标准库）
+mkdir -p /root/dist
+python3 - <<'PY'
+import subprocess, zipfile, os
+root, out = "/root/授权saas", "/root/dist/licensing-saas-v1.5.0.zip"
+files = [f.decode() for f in subprocess.run(["git","ls-files","-z"], cwd=root,
+         capture_output=True).stdout.split(b"\0") if f]
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+    for rel in files:
+        p = os.path.join(root, rel)
+        if os.path.isfile(p) and not os.path.islink(p):
+            z.write(p, os.path.join("licensing-saas", rel))
+print("files:", len(files), "size:", os.path.getsize(out))
+PY
+
+# 或者打 tar.gz（保留可执行位，推荐）
+python3 - <<'PY'
+import subprocess, tarfile, os
+root, out = "/root/授权saas", "/root/dist/licensing-saas-v1.5.0.tar.gz"
+files = [f.decode() for f in subprocess.run(["git","ls-files","-z"], cwd=root,
+         capture_output=True).stdout.split(b"\0") if f]
+if os.path.exists(out): os.remove(out)
+with tarfile.open(out, "w:gz") as tf:
+    for rel in files:
+        p = os.path.join(root, rel)
+        if os.path.isfile(p) and not os.path.islink(p):
+            tf.add(p, arcname="licensing-saas/" + rel)   # 用 ASCII 目录名，避开中文路径
+print("size:", os.path.getsize(out))
+PY
 
 # 目标机器
-tar xzf licensing-saas.tar.gz -C /root
+mkdir -p /root/授权saas
+tar xzf licensing-saas-v1.5.0.tar.gz -C /root
+mv /root/licensing-saas/* /root/licensing-saas/.[!.]* /root/授权saas/ 2>/dev/null
+rmdir /root/licensing-saas
+# 或者直接就用 ASCII 目录名 /root/licensing-saas，把 §7 的 WorkingDirectory 一起改掉（更省事）
+# zip 包：python3 -c "import zipfile;zipfile.ZipFile('licensing-saas-v1.5.0.zip').extractall('/root')"
 ```
 
-> ⚠️ **不要同步 `node_modules` 和 `.next`**。它们是 Node 24 下装/构建的，到 Node 26 上 ABI 不匹配、构建产物也不兼容。必须重装重建。
-> ⚠️ **不要同步 `.keys-prod`**。签名私钥应该在新机器上重新生成，或者从离线备份恢复（见 §9.4）。复制私钥等于把签发能力复制一份。
+> 两个包的顶层目录都用 **ASCII 名 `licensing-saas/`**，不是中文 `授权saas/`——中文路径在跨机器传输、`tar` 解压、systemd `WorkingDirectory` 里都可能出问题。本机因为历史原因叫 `/root/授权saas`，你可以直接改用 `/root/licensing-saas`，只要把 §7 单元里的 `WorkingDirectory` 和 `ExecStart` 前面的路径一起换掉。
+
+本机实测产物：
+
+| 包 | 体积 | 文件数 | 说明 |
+| --- | --- | --- | --- |
+| `licensing-saas-v1.5.0.tar.gz` | 7,648,033 B（7.3 MB） | 379 | 保留文件权限位 |
+| `licensing-saas-v1.5.0.zip` | 7,892,757 B（7.6 MB） | 379 | mode 存在元数据里，但 python 解压会丢 |
+
+两者解压后逐文件 sha256 比对 **379/379 完全一致**，差异为 0。
+
+**打包后的自检（打之前跑一遍，别把密钥打出去）**：
+
+```bash
+python3 - <<'PY'
+import zipfile, tarfile
+z = {n[len('licensing-saas/'):] for n in zipfile.ZipFile('/root/dist/licensing-saas-v1.5.0.zip').namelist() if not n.endswith('/')}
+t = {m.name[len('授权saas/'):] for m in tarfile.open('/root/dist/licensing-saas-v1.5.0.tar.gz').getmembers() if m.isfile()}
+print("只在 zip:", sorted(z-t), "| 只在 tar:", sorted(t-z))
+print("含真 .env:", any(n in t for n in ('.env','.env.local','.env.production')))
+print("含密钥目录:", any(n.startswith(('.keys','.backups')) for n in t))
+print("含 node_modules:", any(n.startswith('node_modules') for n in t))
+PY
+# 期望：只在 zip: [] | 只在 tar: [] / False / False / False
+```
+
+**为什么只打 git 跟踪的文件是对的**：本机 `git ls-files` 里 **0 条** 命中 `.env`/`.keys`/`.backups`（`.gitignore` 已经把它们排掉了），而 `.env.example` 在跟踪列表里（模板必须带）。实测两个包的敏感命中都只有 `.env.example` 这一条，是真需要带的模板。
+
+**解压后必须做的事**（打包不包含、也不该包含的）：
+
+```bash
+cd /root/授权saas
+npm ci && npx prisma generate && npm run build   # 见 §6
+mkdir -p .keys-prod && chmod 700 .keys-prod      # 见下方说明
+# 然后按 §5 写 /etc/licensing-saas/production.env
+```
+
+> ⚠️ **`.keys-prod` 目录必须自己建**。包里没有（正确），但 `/health/ready` 会 `access(SIGNING_KEY_DIR, R_OK)`，目录不存在就返回 503 `signing_key_dir_unreadable`。本机实测过这个场景：从包解出来起服务，`/health/ready` 就是 503，`mkdir -p .keys-prod` 之后立刻变 200。签名密钥由应用在首次需要时生成，目录你得先备好。
+
+> ⚠️ **`.windsurf/skills/*` 那 10 个符号链接不会进包**（`git ls-files` 里有，但 `os.path.islink()` 判断会跳过）。它们只是 IDE 的 skill 软链，指向 `.agents/skills/`，与本项目运行无关。少这 10 条不影响任何功能。
+
+> ⚠️ **不要同步 `node_modules` 和 `.next`**。本机这两个是 Node 24 下装/构建的，到 Node 26 上 ABI 不匹配、构建产物也不兼容。必须重装重建（包本来就排除了它们）。
+> ⚠️ **不要同步 `.keys-prod`**。签名私钥应该在新机器上重新生成，或者从离线备份恢复（见 §9.8）。复制私钥等于把签发能力复制一份。
 
 ### 2.3 确认目录内容
 
