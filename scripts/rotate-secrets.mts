@@ -26,9 +26,9 @@ for (const line of readFileSync(envFile, "utf8").split("\n")) {
 }
 
 const { PrismaPg } = await import("@prisma/adapter-pg");
-const { PrismaClient } = await import("../src/generated/prisma/client.ts");
-const { openWithKeys, sealSecret } = await import("../src/lib/auth/secretbox.ts");
-const { config } = await import("../src/lib/config.ts");
+const { PrismaClient } = await import("../src/generated/prisma/client.js");
+const { openWithKeys, sealSecret } = await import("../src/lib/auth/secretbox.js");
+const { config } = await import("../src/lib/config.js");
 
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: config.databaseUrl }) });
 
