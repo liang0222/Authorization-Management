@@ -104,4 +104,6 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:3101/api/v1/li
 - ~~日志保留期的自动清理任务（需外部 cron）~~ → 已补：`scripts/retention-cleanup.mts` + `licensing-saas-retention.timer`（每日 04:30）；
 - 状态页的维护公告后台（`/developers/status` 只显示聚合指标）；
 - ~~会话列表与「撤销其他设备」界面~~ → 已补：`GET/DELETE /api/v1/admin/me/sessions` + 个人设置页「登录会话」区；
-- WAL/PITR 与月度自动恢复演练。
+- WAL/PITR 与月度自动恢复演练；
+- **异地备份目标尚未接入**（当前只有 local 目标 + 每日 03:00 策略，已实跑验证；S3/WebDAV/SFTP 需真实凭据后加为第二目标）；
+- **HTTPS 证书**（`<你的域名>` 目前只有 80，需从 1Panel 申请证书后加 443 server）。

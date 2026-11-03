@@ -87,6 +87,17 @@ npx prisma migrate deploy
 
 每条策略可以挂多个目标（local / S3 兼容 / WebDAV / SFTP），目标模式 `all_required`（任一失败整体失败）、`primary_then_fallback`（主失败、备成功 → `degraded` 并告警）、`quorum`。
 
+**当前生产配置**（2026-11-03 建）：
+
+| 目标 | 类型 | 位置 | 说明 |
+| --- | --- | --- | --- |
+| `local-primary` | `local` | `/root/授权saas/.backups/backups/production` | 本机暂存，已通过连接测试（写入/读回/删除三步 ok） |
+
+策略 `daily-production`：`0 3 * * *` / `Asia/Shanghai` / `all_required` / `sha256_and_manifest` / 加密开 / 保留 7 日 + 4 周 + 3 月。
+已实跑一次作业验证链路（`status=succeeded`，`ZMBK1` 加密信封，`verify` 与 `restore-test` 四项对账全过）。
+
+> ⚠️ **异地目标尚未接入**：`local` 只解决"每天有加密备份"，不解决"机器整盘坏掉"。把 S3 / WebDAV HTTPS / SFTP 中任一个接进同一策略的第二个目标，才算满足规格 24 的"自动上传独立异地存储"。
+
 每目标状态：`queued → uploading → uploaded → verifying → verified`，失败为 `failed`，未参与为 `skipped`。只有 `verified` 才算备份成功。
 
 ### 4.2 加密
