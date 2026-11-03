@@ -1,0 +1,1914 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "子铭 Licensing API",
+    "version": "1.5.0",
+    "summary": "通用软件授权管理的公开运行时 API",
+    "description": "这份文档是**运行时公开 API**的契约，由代码生成后再人工核对，\n每一条 path 都对应仓库里真实存在的 route handler，并由 `tests/contract/openapi.test.ts` 校验。\n\n- **Base URL**：`https://<LICENSE_API_DOMAIN>/api/v1`（Sandbox：`https://<LICENSE_SANDBOX_DOMAIN>/api/v1`）\n- **认证**：客户端用 `X-Client-ID`（公开标识，不是密码）+ 设备私钥签名；\n  服务端到服务端用 `private_key_jwt` 断言。\n- **错误**：按稳定 `code` 分支，不要匹配 `message` 文案。\n- **重试**：仅网络错误 / 408 / 429 / 5xx 重试，指数退避并尊重 `Retry-After`；400/401/403/410/422 不重试。\n",
+    "license": {
+      "name": "Proprietary"
+    },
+    "contact": {
+      "name": "子铭 · 开发者支持",
+      "url": "https://example.com/developers"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://{domain}/api/v1",
+      "description": "Production",
+      "variables": {
+        "domain": {
+          "default": "license-api.example.com"
+        }
+      }
+    },
+    {
+      "url": "https://{domain}/api/v1",
+      "description": "Sandbox（独立数据库、独立签名密钥、独立产品凭证）",
+      "variables": {
+        "domain": {
+          "default": "sandbox-license-api.example.com"
+        }
+      }
+    }
+  ],
+  "tags": [
+    {
+      "name": "设备激活",
+      "description": "挑战 → 签名 → 激活 → 心跳 → 解绑"
+    },
+    {
+      "name": "权限",
+      "description": "读取授权附带的功能权限"
+    },
+    {
+      "name": "授权校验",
+      "description": "不绑定设备的预检查"
+    },
+    {
+      "name": "服务端集成",
+      "description": "可信后端（网站、小程序）的授权检查与令牌交换"
+    },
+    {
+      "name": "离线与状态",
+      "description": "离线授权文件与激活状态查询"
+    }
+  ],
+  "security": [
+    {
+      "ClientId": []
+    }
+  ],
+  "paths": {
+    "/activation-challenges": {
+      "post": {
+        "tags": [
+          "设备激活"
+        ],
+        "summary": "创建设备激活挑战",
+        "description": "返回一次性 `nonce` 与 `canonical_message`。客户端用设备私钥对规范化消息签名，\n再把签名交给 `POST /activations`。挑战 5 分钟内有效，`nonce` 只能消费一次。\n\n`canonical_message` 的 v1 格式（每行 LF 分隔，末尾不加换行）：\n`LICENSE-ACTIVATION-CHALLENGE-V1` / `challenge_id` / `nonce` / `product_id` /\n`device_instance_id` / `expires_at`。\n",
+        "operationId": "createActivationChallenge",
+        "security": [
+          {
+            "ClientId": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "product_id",
+                  "device"
+                ],
+                "properties": {
+                  "product_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "device": {
+                    "$ref": "#/components/schemas/DevicePublicKey"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "挑战已创建",
+            "headers": {
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ActivationChallenge"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/ClientAuthFailed"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProductDisabled"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/activations": {
+      "post": {
+        "tags": [
+          "设备激活"
+        ],
+        "summary": "用签名完成激活",
+        "description": "必须带 `Idempotency-Key`。同一个 key 配同一个请求体返回首次结果（带 `x-idempotent-replay: true`），\n配不同请求体返回 409 `IDEMPOTENCY_CONFLICT`。\n\n`refresh_token` **只在这里返回一次**，服务端只存哈希；之后的轮换都走心跳。\n",
+        "operationId": "activateDevice",
+        "security": [
+          {
+            "ClientId": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "激活成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Activation"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/ClientAuthFailed"
+          },
+          "409": {
+            "description": "设备数或激活次数已达上限，或幂等键冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "deviceLimit": {
+                    "value": {
+                      "ok": false,
+                      "code": "DEVICE_LIMIT_EXCEEDED",
+                      "message": "设备数量已达上限",
+                      "request_id": "req_2f1c",
+                      "server_time": "2026-11-02T08:00:00.000Z"
+                    }
+                  },
+                  "idempotency": {
+                    "value": {
+                      "ok": false,
+                      "code": "IDEMPOTENCY_CONFLICT",
+                      "message": "相同幂等键但请求体不同",
+                      "request_id": "req_2f1d",
+                      "server_time": "2026-11-02T08:00:01.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "410": {
+            "$ref": "#/components/responses/LicenseGone"
+          },
+          "422": {
+            "$ref": "#/components/responses/LicenseInvalid"
+          },
+          "423": {
+            "$ref": "#/components/responses/LicenseSuspended"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/activations/heartbeat": {
+      "post": {
+        "tags": [
+          "设备激活"
+        ],
+        "summary": "心跳并轮换令牌",
+        "description": "两条通道并存：\n- 请求体带 `refresh_token`（推荐）：每次心跳轮换 refresh token，旧令牌立即失效。\n  检测到旧令牌重放时，**整个令牌族**会被吊销并记录 `activation.blocked` 安全事件。\n- 只带 `Authorization: Bearer`：兼容早期客户端，校验访问令牌的版本号。\n",
+        "operationId": "heartbeat",
+        "security": [
+          {
+            "ClientId": []
+          },
+          {
+            "ClientId": [],
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "activation_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "refresh_token": {
+                    "type": "string"
+                  },
+                  "device_proof": {
+                    "type": "string",
+                    "description": "可选：设备对本次心跳的签名"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "心跳成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Heartbeat"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/ClientAuthFailed"
+          },
+          "410": {
+            "$ref": "#/components/responses/LicenseGone"
+          },
+          "423": {
+            "$ref": "#/components/responses/LicenseSuspended"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/activations/deactivate": {
+      "post": {
+        "tags": [
+          "设备激活"
+        ],
+        "summary": "主动解绑设备",
+        "description": "释放设备名额。默认不返还累计激活次数（是否返还是授权级配置）。\n重复解绑是幂等的：已释放的激活返回 `device_slot_released: false`，不会再写事件。\n",
+        "operationId": "deactivateDevice",
+        "security": [
+          {
+            "ClientId": []
+          },
+          {
+            "ClientId": [],
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "activation_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "refresh_token": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "已解绑",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Deactivation"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/ClientAuthFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/activations/{activation_id}/entitlements": {
+      "get": {
+        "tags": [
+          "权限"
+        ],
+        "summary": "读取功能权限",
+        "description": "返回授权快照中的功能权限。授权已失效（过期/暂停/撤销）时返回 410/423，而不是给一份过期权限。",
+        "operationId": "getEntitlements",
+        "security": [
+          {
+            "ClientId": [],
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "activation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "权限快照",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Entitlements"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/ClientAuthFailed"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "410": {
+            "$ref": "#/components/responses/LicenseGone"
+          },
+          "423": {
+            "$ref": "#/components/responses/LicenseSuspended"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/licenses/validate": {
+      "post": {
+        "tags": [
+          "授权校验"
+        ],
+        "summary": "不绑定设备的授权码预检查",
+        "description": "用于「输入授权码，先看看能不能用」的场景，**不创建激活记录、不消耗次数**。\n出于防枚举考虑，无效授权码只返回 `valid: false` 与稳定 code，不区分「不存在」和「不属于该产品」以外的细节。\n",
+        "operationId": "validateLicenseKey",
+        "security": [
+          {
+            "ClientId": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "license_key"
+                ],
+                "properties": {
+                  "product_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "license_key": {
+                    "type": "string",
+                    "example": "XXXXX-XXXXX-XXXXX-XXXXX-XXXXX"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "校验结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ValidationResult"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/ClientAuthFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/server/licenses/check": {
+      "post": {
+        "tags": [
+          "服务端集成"
+        ],
+        "summary": "可信服务端授权检查",
+        "description": "给网站后端、小程序后端这类**可信服务端**用：认证是 `private_key_jwt` 断言，\n不认 `X-Client-ID`（那个是公开标识，客户端随手就能伪造）。\n\n断言是 EdDSA 紧凑 JWT：header `{alg:\"EdDSA\", kid:\"<credential_id>\"}`，\npayload `{iss, sub, aud, iat, exp, jti}`。约束：\n`iss` = 凭证的 client_id；`aud` = `license-api`；`exp - iat <= 300` 秒；\n`jti` 一次性（重放直接 401）。\n\n`identity.subject_token` 由调用方后端自行认证后传入，服务端只存它的 sha256，不落明文。\n",
+        "operationId": "serverLicenseCheck",
+        "security": [
+          {
+            "ClientAssertion": []
+          },
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "identity"
+                ],
+                "properties": {
+                  "product_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "identity": {
+                    "type": "object",
+                    "required": [
+                      "provider",
+                      "subject_token"
+                    ],
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "enum": [
+                          "wechat_mini_program",
+                          "google",
+                          "microsoft",
+                          "email",
+                          "phone",
+                          "custom"
+                        ]
+                      },
+                      "subject_token": {
+                        "type": "string",
+                        "description": "调用方后端已验证的用户标识明文，服务端只保存它的哈希"
+                      }
+                    }
+                  },
+                  "required_features": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "default": []
+                  },
+                  "client_assertion": {
+                    "type": "string"
+                  },
+                  "client_assertion_type": {
+                    "type": "string",
+                    "const": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "授权检查结果（`authorized` 为 false 时仍是 200，便于调用方降级）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ServerCheck"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/ClientAuthFailed"
+          },
+          "422": {
+            "$ref": "#/components/responses/LicenseInvalid"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/activations/{activation_id}": {
+      "get": {
+        "tags": [
+          "离线与状态"
+        ],
+        "summary": "查询单个激活的当前状态",
+        "description": "客户端拿不到心跳响应时，可以用它确认「是网络断了，还是授权真的失效了」。\n\n**注意**：授权不可用时这里仍然返回 200，并把 `usable` 置为 false、`status_reason`\n说明原因。这样调用方能区分「请求失败」与「授权确实不能用了」—— 前者该重试，\n后者该弹窗让用户处理。\n",
+        "operationId": "getActivation",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "activation_id",
+            "in": "path",
+            "required": true,
+            "description": "激活记录 ID；必须与令牌里的 aid 一致，否则 403",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "激活的当前状态（不可用也是 200，看 usable 字段）",
+            "headers": {
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ActivationStatus"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/ClientAuthFailed"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/LicenseInvalid"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/offline-grants": {
+      "post": {
+        "tags": [
+          "离线与状态"
+        ],
+        "summary": "签发离线授权文件",
+        "description": "给已激活的设备签发一份可离线校验的授权文件（格式 `license-offline-v1`）。\n\n签名覆盖的是 `canonicalJson(grant)` —— 键名排序、无多余空白、日期用 ISO8601 的\n确定性序列化。客户端应缓存 `canonical_payload` 原文与 `signing_key`，断网时用\n`public_key`（SPKI DER base64url）或 `raw_public_key`（32 字节裸密钥）验签。\n\n`valid_until` 取 `min(now + min(grace_seconds, 90 天), 授权到期时间)`：\n离线文件永远不会比授权本身活得更久。\n\n`serial` 全局唯一，服务端留档，撤销授权后可用它排查哪些设备还持有旧文件。\n",
+        "operationId": "createOfflineGrant",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "activation_id"
+                ],
+                "properties": {
+                  "activation_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "离线授权文件已签发",
+            "headers": {
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/OfflineGrant"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/ClientAuthFailed"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/LicenseInvalid"
+          },
+          "423": {
+            "$ref": "#/components/responses/LicenseSuspended"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/oauth/token": {
+      "post": {
+        "tags": [
+          "服务端集成"
+        ],
+        "summary": "用服务端断言换取访问令牌",
+        "description": "服务端到服务端场景：用 `private_key_jwt`（EdDSA）断言换取短期 Bearer 令牌，\n之后调 `/server/licenses/check` 等端点时带上它，避免每次请求都重新签断言。\n\n**只支持 `private_key_jwt`**。传 `client_secret` 或 `client_credentials` 会返回\n`400 UNSUPPORTED_GRANT_TYPE` —— 共享密钥一旦泄漏就无法区分调用方，且无法轮换。\n\n请求的 `scope` 只能**收窄**凭证自身的权限，不能放大；越权会返回 `400 INVALID_SCOPE`\n并在 `available` 里列出可用范围。\n",
+        "operationId": "exchangeServerToken",
+        "security": [
+          {
+            "ClientAssertion": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "grant_type"
+                ],
+                "properties": {
+                  "grant_type": {
+                    "type": "string",
+                    "const": "private_key_jwt"
+                  },
+                  "client_assertion": {
+                    "type": "string"
+                  },
+                  "client_assertion_type": {
+                    "type": "string",
+                    "const": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+                  },
+                  "scope": {
+                    "type": "string",
+                    "description": "空格分隔；省略则继承凭证的全部 scope"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "令牌已签发",
+            "headers": {
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ServerToken"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/ClientAuthFailed"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ClientId": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Client-ID",
+        "description": "公开客户端标识。**不是密码**，可以出现在前端代码里；它只说明「你是哪个产品」。"
+      },
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "激活后拿到的短期访问令牌（`access_token`）。"
+      },
+      "ClientAssertion": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "Authorization",
+        "description": "服务端断言，形如 `Bearer <EdDSA JWT>`；也可放在请求体 `client_assertion`。"
+      }
+    },
+    "parameters": {
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "description": "写操作必填，至少 8 字符。建议用请求体哈希或业务主键，重试时保持不变。",
+        "schema": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128
+        }
+      }
+    },
+    "headers": {
+      "RateLimitLimit": {
+        "description": "当前端点在窗口内允许的请求数",
+        "schema": {
+          "type": "integer"
+        }
+      },
+      "RateLimitRemaining": {
+        "description": "窗口内剩余请求数",
+        "schema": {
+          "type": "integer"
+        }
+      },
+      "RateLimitReset": {
+        "description": "距离窗口重置的秒数",
+        "schema": {
+          "type": "integer"
+        }
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "通用错误响应（按 `code` 分支处理，不要按 message 判断）",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "BadRequest": {
+        "description": "请求体不合法（字段缺失、类型错误、缺少 Idempotency-Key）",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "ClientAuthFailed": {
+        "description": "客户端标识无效、签名校验失败、令牌过期或断言重放",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "examples": {
+              "invalidSignature": {
+                "value": {
+                  "ok": false,
+                  "code": "CLIENT_AUTH_FAILED",
+                  "message": "设备签名校验失败",
+                  "request_id": "req_9a12",
+                  "server_time": "2026-11-02T08:00:02.000Z"
+                }
+              }
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "凭证缺少所需 scope，或令牌不属于该资源",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "资源不存在",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "ProductDisabled": {
+        "description": "产品已被平台禁用，所有客户端请求一律拒绝",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "LicenseInvalid": {
+        "description": "授权无效、产品不匹配或授权尚未生效",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "LicenseGone": {
+        "description": "授权已过期，或激活窗口已关闭",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "LicenseSuspended": {
+        "description": "授权已暂停，或设备被管理员封禁",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "触发限流。按 `Retry-After` 重试，不要立刻重发。",
+        "headers": {
+          "Retry-After": {
+            "description": "建议等待秒数",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          "RateLimit-Limit": {
+            "$ref": "#/components/headers/RateLimitLimit"
+          },
+          "RateLimit-Remaining": {
+            "$ref": "#/components/headers/RateLimitRemaining"
+          },
+          "RateLimit-Reset": {
+            "$ref": "#/components/headers/RateLimitReset"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Envelope": {
+        "type": "object",
+        "required": [
+          "ok",
+          "code",
+          "message",
+          "request_id",
+          "server_time",
+          "data"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "code": {
+            "type": "string",
+            "const": "OK"
+          },
+          "message": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string",
+            "description": "请求追踪标识；排查问题时请附带此值，勿附带授权码或令牌"
+          },
+          "server_time": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "data": {}
+        }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "required": [
+          "ok",
+          "code",
+          "message",
+          "request_id",
+          "server_time"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "code": {
+            "type": "string",
+            "description": "稳定错误码，按它分支判断",
+            "enum": [
+              "INVALID_REQUEST",
+              "CLIENT_AUTH_FAILED",
+              "CSRF_FAILED",
+              "FORBIDDEN",
+              "PRODUCT_DISABLED",
+              "RESOURCE_NOT_FOUND",
+              "LICENSE_ALREADY_BOUND",
+              "DEVICE_LIMIT_EXCEEDED",
+              "ACTIVATION_LIMIT_REACHED",
+              "IDEMPOTENCY_CONFLICT",
+              "LICENSE_EXPIRED",
+              "ACTIVATION_WINDOW_EXPIRED",
+              "LICENSE_SUSPENDED",
+              "DEVICE_BLOCKED",
+              "LICENSE_INVALID",
+              "PRODUCT_MISMATCH",
+              "RATE_LIMITED",
+              "INTERNAL_ERROR",
+              "LICENSE_SERVICE_UNAVAILABLE"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "description": "人类可读说明，可能变化，不要用于程序分支"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "server_time": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "details": {}
+        }
+      },
+      "DevicePublicKey": {
+        "type": "object",
+        "required": [
+          "device_instance_id",
+          "platform",
+          "public_key"
+        ],
+        "properties": {
+          "device_instance_id": {
+            "type": "string",
+            "minLength": 4,
+            "maxLength": 120,
+            "description": "设备唯一标识；重装系统后应重新生成，不要用 MAC/磁盘序列号"
+          },
+          "platform": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 40,
+            "example": "windows"
+          },
+          "device_name": {
+            "type": "string",
+            "maxLength": 160,
+            "nullable": true
+          },
+          "public_key": {
+            "type": "string",
+            "description": "Ed25519 公钥，Base64URL 无填充的 SPKI DER"
+          }
+        }
+      },
+      "ActivationChallenge": {
+        "type": "object",
+        "required": [
+          "challenge_id",
+          "nonce",
+          "expires_at",
+          "signing_algorithm",
+          "canonical_version",
+          "canonical_message"
+        ],
+        "properties": {
+          "challenge_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "nonce": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "signing_algorithm": {
+            "type": "string",
+            "const": "Ed25519"
+          },
+          "canonical_version": {
+            "type": "string",
+            "enum": [
+              "v1"
+            ]
+          },
+          "canonical_message": {
+            "type": "string",
+            "description": "已按 v1 规则拼好的待签名原文，直接对它签名即可"
+          }
+        }
+      },
+      "ActivateRequest": {
+        "type": "object",
+        "required": [
+          "license_key",
+          "challenge_id",
+          "device"
+        ],
+        "properties": {
+          "product_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "license_key": {
+            "type": "string"
+          },
+          "challenge_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "device": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DevicePublicKey"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "signature": {
+                    "type": "string",
+                    "description": "对 `canonical_message` 的 Ed25519 签名，Base64URL 无填充"
+                  }
+                }
+              }
+            ]
+          },
+          "signature": {
+            "type": "string",
+            "description": "兼容字段：早期客户端把签名放在顶层"
+          },
+          "canonical_version": {
+            "type": "string",
+            "enum": [
+              "v1",
+              "legacy"
+            ],
+            "description": "声明签名所用规范化版本；不传则服务端依次尝试 v1 与 legacy"
+          },
+          "client": {
+            "type": "object",
+            "properties": {
+              "app_version": {
+                "type": "string"
+              },
+              "sdk_version": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "Activation": {
+        "type": "object",
+        "required": [
+          "activation_id",
+          "license_id",
+          "product_id",
+          "effective_status",
+          "starts_at",
+          "expires_at",
+          "duration",
+          "device_limit",
+          "activation_limit",
+          "entitlements",
+          "entitlements_version",
+          "access_token",
+          "access_token_expires_at",
+          "refresh_token",
+          "refresh_token_expires_at",
+          "heartbeat_interval_seconds"
+        ],
+        "properties": {
+          "activation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "license_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "product_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "effective_status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "suspended",
+              "revoked",
+              "cancelled",
+              "draft",
+              "pending",
+              "expired",
+              "not_yet_valid",
+              "activation_window_expired",
+              "product_disabled"
+            ]
+          },
+          "starts_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "null 表示永久授权"
+          },
+          "duration": {
+            "type": "object",
+            "properties": {
+              "unit": {
+                "type": "string",
+                "enum": [
+                  "day",
+                  "month",
+                  "lifetime"
+                ]
+              },
+              "value": {
+                "type": "integer"
+              },
+              "label": {
+                "type": "string",
+                "example": "30 天"
+              }
+            }
+          },
+          "device_limit": {
+            "type": "object",
+            "properties": {
+              "max": {
+                "type": "integer"
+              },
+              "active": {
+                "type": "integer"
+              }
+            }
+          },
+          "activation_limit": {
+            "type": "object",
+            "properties": {
+              "max": {
+                "type": "integer",
+                "nullable": true,
+                "description": "null 表示不限次数"
+              },
+              "used": {
+                "type": "integer"
+              }
+            }
+          },
+          "entitlements": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "entitlements_version": {
+            "type": "integer"
+          },
+          "access_token": {
+            "type": "string"
+          },
+          "access_token_expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "refresh_token": {
+            "type": "string",
+            "description": "只返回这一次，请立即安全存储"
+          },
+          "refresh_token_expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "heartbeat_interval_seconds": {
+            "type": "integer",
+            "example": 900
+          }
+        }
+      },
+      "Heartbeat": {
+        "type": "object",
+        "required": [
+          "effective_status",
+          "entitlements",
+          "entitlements_version",
+          "access_token",
+          "next_heartbeat_seconds"
+        ],
+        "properties": {
+          "effective_status": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "entitlements_version": {
+            "type": "integer"
+          },
+          "entitlements": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "access_token": {
+            "type": "string"
+          },
+          "access_token_expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "refresh_token": {
+            "type": "string",
+            "nullable": true,
+            "description": "轮换后的新 refresh token；用 Bearer 通道时为 null"
+          },
+          "refresh_token_expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "next_heartbeat_seconds": {
+            "type": "integer"
+          }
+        }
+      },
+      "Deactivation": {
+        "type": "object",
+        "properties": {
+          "activation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "const": "released"
+          },
+          "device_slot_released": {
+            "type": "boolean",
+            "description": "false 表示重复解绑（幂等）或本就未占用名额"
+          }
+        }
+      },
+      "Entitlements": {
+        "type": "object",
+        "properties": {
+          "license_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "activation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "effective_status": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "entitlements_version": {
+            "type": "integer"
+          },
+          "entitlements": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "ValidationResult": {
+        "type": "object",
+        "properties": {
+          "valid": {
+            "type": "boolean"
+          },
+          "code": {
+            "type": "string",
+            "nullable": true
+          },
+          "effective_status": {
+            "type": "string",
+            "nullable": true
+          },
+          "product_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "duration": {
+            "type": "object",
+            "nullable": true
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "device_limit": {
+            "type": "object",
+            "nullable": true
+          },
+          "activation_limit": {
+            "type": "object",
+            "nullable": true
+          }
+        }
+      },
+      "ServerCheck": {
+        "type": "object",
+        "required": [
+          "authorized",
+          "missing_features"
+        ],
+        "properties": {
+          "authorized": {
+            "type": "boolean"
+          },
+          "effective_status": {
+            "type": "string",
+            "nullable": true
+          },
+          "license_id": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "entitlements_version": {
+            "type": "integer",
+            "nullable": true
+          },
+          "entitlements": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "missing_features": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "授权未覆盖的功能，调用方据此降级"
+          }
+        }
+      },
+      "ActivationStatus": {
+        "type": "object",
+        "required": [
+          "activation_id",
+          "usable",
+          "status"
+        ],
+        "properties": {
+          "activation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "license_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "product_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "product_code": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "released",
+              "revoked"
+            ],
+            "description": "绑定行为的状态，与「授权是否有效」是两件事"
+          },
+          "effective_status": {
+            "type": "string",
+            "description": "九级优先级算出的业务有效状态"
+          },
+          "usable": {
+            "type": "boolean",
+            "description": "false 时不要放行功能"
+          },
+          "status_reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "activated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "released_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "device": {
+            "type": "object",
+            "properties": {
+              "device_instance_id": {
+                "type": "string"
+              },
+              "platform": {
+                "type": "string"
+              },
+              "device_name": {
+                "type": "string",
+                "nullable": true
+              },
+              "public_key_thumbprint": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          },
+          "device_limit": {
+            "type": "object",
+            "properties": {
+              "max": {
+                "type": "integer"
+              },
+              "active": {
+                "type": "integer"
+              }
+            }
+          },
+          "entitlements_version": {
+            "type": "integer"
+          },
+          "offline": {
+            "type": "object",
+            "properties": {
+              "allowed": {
+                "type": "boolean"
+              },
+              "grace_seconds": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      },
+      "OfflineGrant": {
+        "type": "object",
+        "required": [
+          "grant",
+          "signature",
+          "algorithm",
+          "signing_key"
+        ],
+        "properties": {
+          "grant": {
+            "$ref": "#/components/schemas/OfflineGrantPayload"
+          },
+          "signature": {
+            "type": "string",
+            "description": "对 canonical_payload 字节的 Ed25519 签名，base64url 无填充"
+          },
+          "algorithm": {
+            "type": "string",
+            "const": "EdDSA"
+          },
+          "signing_key": {
+            "type": "object",
+            "description": "只含公钥；轮换期间要按 kid 选择对应的公钥",
+            "required": [
+              "kid",
+              "public_key",
+              "algorithm"
+            ],
+            "properties": {
+              "kid": {
+                "type": "string"
+              },
+              "public_key": {
+                "type": "string",
+                "description": "SPKI DER，base64url"
+              },
+              "raw_public_key": {
+                "type": "string",
+                "description": "32 字节裸公钥，base64url"
+              },
+              "algorithm": {
+                "type": "string",
+                "const": "EdDSA"
+              }
+            }
+          },
+          "canonical_payload": {
+            "type": "string",
+            "description": "被签名的确切字符串；客户端重算时不要自己重新序列化"
+          },
+          "expires_in_seconds": {
+            "type": "integer",
+            "description": "距离 valid_until 的剩余秒数"
+          }
+        }
+      },
+      "OfflineGrantPayload": {
+        "type": "object",
+        "required": [
+          "format",
+          "kid",
+          "serial",
+          "product_id",
+          "activation_id",
+          "issued_at",
+          "valid_until"
+        ],
+        "properties": {
+          "format": {
+            "type": "string",
+            "const": "license-offline-v1"
+          },
+          "kid": {
+            "type": "string"
+          },
+          "serial": {
+            "type": "string",
+            "description": "服务端留档的唯一序列号"
+          },
+          "product_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "license_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "activation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "device_instance_id": {
+            "type": "string"
+          },
+          "device_key_thumbprint": {
+            "type": "string",
+            "description": "形如 sha256:<base64url>；客户端要确认这是自己那把设备密钥"
+          },
+          "issued_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "valid_until": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "entitlements_version": {
+            "type": "integer"
+          },
+          "entitlements": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "effective_status": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "ServerToken": {
+        "type": "object",
+        "required": [
+          "access_token",
+          "token_type",
+          "expires_in",
+          "scope"
+        ],
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "description": "EdDSA JWT，含 token_use=server_access"
+          },
+          "token_type": {
+            "type": "string",
+            "const": "Bearer"
+          },
+          "expires_in": {
+            "type": "integer"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "issued_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "scope": {
+            "type": "string",
+            "description": "空格分隔的实际授予范围"
+          },
+          "signing_key": {
+            "type": "object",
+            "properties": {
+              "kid": {
+                "type": "string"
+              },
+              "algorithm": {
+                "type": "string",
+                "const": "EdDSA"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

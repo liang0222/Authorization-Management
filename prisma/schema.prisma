@@ -1,0 +1,964 @@
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["partialIndexes"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model activation_challenges {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id    String    @db.Uuid
+  product_id         String    @db.Uuid
+  challenge_id       String    @unique @db.Uuid
+  nonce              String
+  device_instance_id String    @db.VarChar(120)
+  expires_at         DateTime  @db.Timestamptz(6)
+  consumed_at        DateTime? @db.Timestamptz(6)
+  created_at         DateTime  @default(now()) @db.Timestamptz(6)
+  products           products  @relation(fields: [product_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([expires_at], map: "idx_activation_challenges_expiry")
+}
+
+model activation_events {
+  id              BigInt      @id @default(autoincrement())
+  organization_id String      @db.Uuid
+  activation_id   String      @db.Uuid
+  event_type      String      @db.VarChar(60)
+  actor_type      String      @db.VarChar(30)
+  actor_id        String?     @db.Uuid
+  request_id      String?     @db.VarChar(100)
+  ip              String?     @db.Inet
+  details         Json        @default("{}")
+  created_at      DateTime    @default(now()) @db.Timestamptz(6)
+  activations     activations @relation(fields: [activation_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([activation_id, created_at(sort: Desc)], map: "idx_activation_events_activation")
+}
+
+model activation_refresh_tokens {
+  id                              String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                 String                      @db.Uuid
+  activation_id                   String                      @db.Uuid
+  token_family_id                 String                      @db.Uuid
+  token_hash                      Bytes                       @unique
+  issued_at                       DateTime                    @default(now()) @db.Timestamptz(6)
+  expires_at                      DateTime                    @db.Timestamptz(6)
+  used_at                         DateTime?                   @db.Timestamptz(6)
+  revoked_at                      DateTime?                   @db.Timestamptz(6)
+  replaced_by                     String?                     @db.Uuid
+  activations                     activations                 @relation(fields: [activation_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+  activation_refresh_tokens       activation_refresh_tokens?  @relation("activation_refresh_tokensToactivation_refresh_tokens", fields: [replaced_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  other_activation_refresh_tokens activation_refresh_tokens[] @relation("activation_refresh_tokensToactivation_refresh_tokens")
+
+  @@index([activation_id, issued_at(sort: Desc)], map: "idx_refresh_tokens_activation")
+  @@index([expires_at], map: "idx_refresh_tokens_expiry")
+  @@index([token_family_id, issued_at(sort: Desc)], map: "idx_refresh_tokens_family")
+}
+
+model activations {
+  id                        String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id           String                      @db.Uuid
+  product_id                String                      @db.Uuid
+  license_id                String                      @db.Uuid
+  device_id                 String                      @db.Uuid
+  status                    activation_status           @default(active)
+  activated_at              DateTime                    @default(now()) @db.Timestamptz(6)
+  last_seen_at              DateTime                    @default(now()) @db.Timestamptz(6)
+  released_at               DateTime?                   @db.Timestamptz(6)
+  revoked_at                DateTime?                   @db.Timestamptz(6)
+  client_version            String?                     @db.VarChar(80)
+  credential_hash           Bytes?
+  credential_version        Int                         @default(1)
+  token_version             Int                         @default(1)
+  last_ip                   String?                     @db.Inet
+  metadata                  Json                        @default("{}")
+  activation_events         activation_events[]
+  activation_refresh_tokens activation_refresh_tokens[]
+  devices                   devices                     @relation(fields: [device_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+  licenses                  licenses                    @relation(fields: [license_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+  products                  products                    @relation(fields: [product_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+  offline_grants            offline_grants[]
+
+  @@unique([id, organization_id])
+  @@unique([license_id, device_id], map: "uq_activation_license_device_active", where: raw("(status = 'active'::activation_status)"))
+  @@unique([product_id, device_id], map: "uq_activation_product_device_active", where: raw("(status = 'active'::activation_status)"))
+  @@index([device_id, status], map: "idx_activations_device_status")
+  @@index([last_seen_at(sort: Desc)], map: "idx_activations_last_seen", where: raw("(status = 'active'::activation_status)"))
+  @@index([license_id, status, activated_at(sort: Desc)], map: "idx_activations_license_status")
+}
+
+model admin_sessions {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String        @db.Uuid
+  user_id         String        @db.Uuid
+  token_hash      Bytes         @unique
+  csrf_token_hash Bytes
+  ip              String?       @db.Inet
+  user_agent      String?
+  created_at      DateTime      @default(now()) @db.Timestamptz(6)
+  last_seen_at    DateTime      @default(now()) @db.Timestamptz(6)
+  expires_at      DateTime      @db.Timestamptz(6)
+  revoked_at      DateTime?     @db.Timestamptz(6)
+  organizations   organizations @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users           users         @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([user_id, expires_at(sort: Desc)], map: "idx_admin_sessions_user")
+}
+
+model api_request_logs {
+  id              BigInt   @id @default(autoincrement())
+  organization_id String?  @db.Uuid
+  product_id      String?  @db.Uuid
+  request_id      String   @db.VarChar(100)
+  method          String   @db.VarChar(10)
+  route           String   @db.VarChar(180)
+  response_status Int
+  error_code      String?  @db.VarChar(80)
+  latency_ms      Int
+  ip              String?  @db.Inet
+  created_at      DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([organization_id, response_status, created_at(sort: Desc)], map: "idx_api_logs_org_status_time")
+  @@index([product_id, created_at(sort: Desc)], map: "idx_api_logs_product_time")
+}
+
+model audit_logs {
+  id              BigInt   @id @default(autoincrement())
+  organization_id String   @db.Uuid
+  actor_type      String   @db.VarChar(30)
+  actor_id        String?  @db.Uuid
+  action          String   @db.VarChar(120)
+  resource_type   String   @db.VarChar(80)
+  resource_id     String?  @db.Uuid
+  before_data     Json?
+  after_data      Json?
+  request_id      String?  @db.VarChar(100)
+  ip              String?  @db.Inet
+  user_agent      String?
+  created_at      DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([organization_id, created_at(sort: Desc)], map: "idx_audit_org_time")
+  @@index([resource_type, resource_id, created_at(sort: Desc)], map: "idx_audit_resource")
+}
+
+model backup_job_targets {
+  id                          String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id             String                      @db.Uuid
+  job_id                      String                      @db.Uuid
+  destination_id              String                      @db.Uuid
+  status                      backup_target_status        @default(queued)
+  remote_uri                  String?
+  remote_size_bytes           BigInt?
+  checksum_sha256             String?                     @db.VarChar(64)
+  uploaded_at                 DateTime?                   @db.Timestamptz(6)
+  verified_at                 DateTime?                   @db.Timestamptz(6)
+  retry_count                 Int                         @default(0)
+  error_code                  String?                     @db.VarChar(80)
+  error_message               String?
+  backup_storage_destinations backup_storage_destinations @relation(fields: [destination_id], references: [id], onUpdate: NoAction)
+  backup_jobs                 backup_jobs                 @relation(fields: [job_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  organizations               organizations               @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([job_id, destination_id])
+}
+
+model backup_jobs {
+  id                   String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id      String                 @db.Uuid
+  policy_id            String?                @db.Uuid
+  backup_id            String                 @unique @db.VarChar(80)
+  status               backup_job_status      @default(queued)
+  trigger              String                 @default("manual") @db.VarChar(40)
+  started_at           DateTime?              @db.Timestamptz(6)
+  finished_at          DateTime?              @db.Timestamptz(6)
+  size_bytes           BigInt?
+  local_path           String?
+  manifest_sha256      String?                @db.VarChar(64)
+  error_code           String?                @db.VarChar(80)
+  error_message        String?
+  created_by           String?                @db.Uuid
+  created_at           DateTime               @default(now()) @db.Timestamptz(6)
+  backup_job_targets   backup_job_targets[]
+  users                users?                 @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  organizations        organizations          @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  backup_policies      backup_policies?       @relation(fields: [policy_id], references: [id], onUpdate: NoAction)
+  backup_restore_tests backup_restore_tests[]
+
+  @@index([organization_id, created_at(sort: Desc)], map: "idx_backup_jobs_org_created")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model backup_policies {
+  id                     String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id        String                  @db.Uuid
+  name                   String                  @db.VarChar(120)
+  scope                  String                  @default("database") @db.VarChar(40)
+  schedule_cron          String                  @default("0 3 * * *") @db.VarChar(60)
+  timezone               String                  @default("UTC") @db.VarChar(64)
+  target_mode            backup_target_mode      @default(all_required)
+  required_success_count Int?
+  retention_json         Json                    @default("{\"daily\": 7, \"weekly\": 4, \"monthly\": 6}")
+  verify_mode            backup_verify_mode      @default(sha256_and_manifest)
+  bandwidth_limit_kbps   Int?
+  parallelism            Int                     @default(2)
+  encrypt                Boolean                 @default(true)
+  enabled                Boolean                 @default(true)
+  created_at             DateTime                @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime                @default(now()) @db.Timestamptz(6)
+  backup_jobs            backup_jobs[]
+  organizations          organizations           @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  backup_policy_targets  backup_policy_targets[]
+
+  @@unique([organization_id, name])
+}
+
+model backup_policy_targets {
+  id                          String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id             String                      @db.Uuid
+  policy_id                   String                      @db.Uuid
+  destination_id              String                      @db.Uuid
+  priority                    Int                         @default(100)
+  is_required                 Boolean                     @default(true)
+  backup_storage_destinations backup_storage_destinations @relation(fields: [destination_id], references: [id], onUpdate: NoAction)
+  organizations               organizations               @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  backup_policies             backup_policies             @relation(fields: [policy_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([policy_id, destination_id])
+}
+
+model backup_restore_tests {
+  id                          String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id             String                       @db.Uuid
+  job_id                      String?                      @db.Uuid
+  destination_id              String?                      @db.Uuid
+  status                      backup_restore_status        @default(queued)
+  test_environment            String                       @default("sandbox-schema") @db.VarChar(120)
+  verified_checks_json        Json                         @default("[]")
+  rpo_seconds                 Int?
+  rto_seconds                 Int?
+  error_message               String?
+  started_at                  DateTime?                    @db.Timestamptz(6)
+  finished_at                 DateTime?                    @db.Timestamptz(6)
+  created_by                  String?                      @db.Uuid
+  created_at                  DateTime                     @default(now()) @db.Timestamptz(6)
+  users                       users?                       @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  backup_storage_destinations backup_storage_destinations? @relation(fields: [destination_id], references: [id], onUpdate: NoAction)
+  backup_jobs                 backup_jobs?                 @relation(fields: [job_id], references: [id], onUpdate: NoAction)
+  organizations               organizations                @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([organization_id, created_at(sort: Desc)], map: "idx_backup_restore_tests_org_created")
+}
+
+model backup_storage_credentials {
+  id                                                                                                 String                        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                                                                    String                        @db.Uuid
+  destination_id                                                                                     String                        @db.Uuid
+  ciphertext                                                                                         Bytes
+  algorithm                                                                                          String                        @default("aes-256-gcm") @db.VarChar(40)
+  key_version                                                                                        Int                           @default(1)
+  fingerprint                                                                                        String?                       @db.VarChar(120)
+  rotated_at                                                                                         DateTime?                     @db.Timestamptz(6)
+  revoked_at                                                                                         DateTime?                     @db.Timestamptz(6)
+  created_at                                                                                         DateTime                      @default(now()) @db.Timestamptz(6)
+  backup_storage_destinations_backup_storage_credentials_destination_idTobackup_storage_destinations backup_storage_destinations   @relation("backup_storage_credentials_destination_idTobackup_storage_destinations", fields: [destination_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  organizations                                                                                      organizations                 @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  backup_storage_destinations_backup_storage_destinations_credential_idTobackup_storage_credentials  backup_storage_destinations[] @relation("backup_storage_destinations_credential_idTobackup_storage_credentials")
+}
+
+model backup_storage_destinations {
+  id                                                                                                String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                                                                   String                       @db.Uuid
+  name                                                                                              String                       @db.VarChar(120)
+  provider_type                                                                                     backup_provider_type
+  adapter_type                                                                                      backup_adapter_type          @default(native)
+  endpoint_url                                                                                      String?
+  region                                                                                            String?                      @db.VarChar(64)
+  bucket                                                                                            String?                      @db.VarChar(160)
+  root_path                                                                                         String?
+  remote_prefix                                                                                     String?
+  auth_method                                                                                       backup_auth_method           @default(none)
+  credential_id                                                                                     String?                      @db.Uuid
+  tls_verify                                                                                        Boolean                      @default(true)
+  enabled                                                                                           Boolean                      @default(true)
+  priority                                                                                          Int                          @default(100)
+  is_required                                                                                       Boolean                      @default(true)
+  capability_snapshot                                                                               Json                         @default("{}")
+  last_tested_at                                                                                    DateTime?                    @db.Timestamptz(6)
+  last_test_status                                                                                  backup_test_status           @default(untested)
+  last_test_error_code                                                                              String?                      @db.VarChar(80)
+  last_test_error                                                                                   String?
+  created_at                                                                                        DateTime                     @default(now()) @db.Timestamptz(6)
+  updated_at                                                                                        DateTime                     @default(now()) @db.Timestamptz(6)
+  backup_job_targets                                                                                backup_job_targets[]
+  backup_policy_targets                                                                             backup_policy_targets[]
+  backup_restore_tests                                                                              backup_restore_tests[]
+  backup_storage_credentials_backup_storage_credentials_destination_idTobackup_storage_destinations backup_storage_credentials[] @relation("backup_storage_credentials_destination_idTobackup_storage_destinations")
+  backup_storage_credentials_backup_storage_destinations_credential_idTobackup_storage_credentials  backup_storage_credentials?  @relation("backup_storage_destinations_credential_idTobackup_storage_credentials", fields: [credential_id], references: [id], onUpdate: NoAction, map: "backup_storage_destinations_credential_fk")
+  organizations                                                                                     organizations                @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([organization_id, name])
+}
+
+model customer_identities {
+  id              String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String            @db.Uuid
+  customer_id     String            @db.Uuid
+  product_id      String            @db.Uuid
+  provider        identity_provider
+  subject_hash    Bytes
+  display_name    String?           @db.VarChar(160)
+  status          identity_status   @default(active)
+  verified_at     DateTime?         @db.Timestamptz(6)
+  created_at      DateTime          @default(now()) @db.Timestamptz(6)
+  customers       customers         @relation(fields: [customer_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+  products        products          @relation(fields: [product_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([id, organization_id])
+  @@unique([product_id, provider, subject_hash])
+  @@index([customer_id, status], map: "idx_customer_identities_customer")
+}
+
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model customers {
+  id                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id     String                @db.Uuid
+  customer_code       String?               @db.VarChar(80)
+  name                String                @db.VarChar(160)
+  email               String?               @db.VarChar(254)
+  phone               String?               @db.VarChar(40)
+  company_name        String?               @db.VarChar(160)
+  notes               String?
+  status              record_status         @default(active)
+  metadata            Json                  @default("{}")
+  created_at          DateTime              @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime              @default(now()) @db.Timestamptz(6)
+  customer_identities customer_identities[]
+  organizations       organizations         @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  licenses            licenses[]
+
+  @@unique([id, organization_id])
+  @@unique([organization_id, customer_code], map: "uq_customers_org_code", where: raw("(customer_code IS NOT NULL)"))
+  @@index([organization_id, name], map: "idx_customers_org_name")
+}
+
+model devices {
+  id                    String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id       String        @db.Uuid
+  product_id            String        @db.Uuid
+  device_instance_id    String        @db.VarChar(120)
+  platform              String        @db.VarChar(40)
+  device_name           String?       @db.VarChar(160)
+  public_key            Bytes?
+  public_key_thumbprint String?       @db.VarChar(128)
+  fingerprint_hash      Bytes?
+  status                record_status @default(active)
+  first_seen_at         DateTime      @default(now()) @db.Timestamptz(6)
+  last_seen_at          DateTime?     @db.Timestamptz(6)
+  metadata              Json          @default("{}")
+  activations           activations[]
+  products              products      @relation(fields: [product_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([id, organization_id])
+  @@unique([product_id, device_instance_id])
+  @@index([product_id, fingerprint_hash], map: "idx_devices_fingerprint", where: raw("(fingerprint_hash IS NOT NULL)"))
+  @@index([product_id, status, last_seen_at(sort: Desc)], map: "idx_devices_product_status")
+}
+
+model idempotency_records {
+  id              BigInt   @id @default(autoincrement())
+  organization_id String   @db.Uuid
+  product_id      String   @db.Uuid
+  scope           String   @db.VarChar(120)
+  idempotency_key String   @db.VarChar(120)
+  request_hash    Bytes
+  response_status Int?
+  response_body   Json?
+  created_at      DateTime @default(now()) @db.Timestamptz(6)
+  expires_at      DateTime @db.Timestamptz(6)
+
+  @@unique([product_id, scope, idempotency_key])
+  @@index([expires_at], map: "idx_idempotency_expiry")
+}
+
+model license_features {
+  license_id       String           @db.Uuid
+  product_id       String           @db.Uuid
+  organization_id  String           @db.Uuid
+  feature_code     String           @db.VarChar(100)
+  feature_value    Json
+  updated_at       DateTime         @default(now()) @db.Timestamptz(6)
+  licenses         licenses         @relation(fields: [license_id, product_id, organization_id], references: [id, product_id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+  product_features product_features @relation(fields: [product_id, feature_code], references: [product_id, code], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([license_id, feature_code])
+}
+
+model license_keys {
+  id                String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id   String        @db.Uuid
+  license_id        String        @db.Uuid
+  key_prefix        String        @db.VarChar(16)
+  key_last4         String        @db.VarChar(4)
+  key_hash          Bytes         @unique
+  hash_key_version  String        @db.VarChar(40)
+  status            record_status @default(active)
+  valid_until       DateTime?     @db.Timestamptz(6)
+  first_redeemed_at DateTime?     @db.Timestamptz(6)
+  created_at        DateTime      @default(now()) @db.Timestamptz(6)
+  revoked_at        DateTime?     @db.Timestamptz(6)
+  licenses          licenses      @relation(fields: [license_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([license_id, status], map: "idx_license_keys_license")
+  @@index([key_prefix, key_last4], map: "idx_license_keys_prefix")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model license_renewals {
+  id                   String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id      String        @db.Uuid
+  license_id           String        @db.Uuid
+  duration_unit        duration_unit
+  duration_value       Int
+  previous_expires_at  DateTime?     @db.Timestamptz(6)
+  renewal_starts_at    DateTime      @db.Timestamptz(6)
+  new_expires_at       DateTime?     @db.Timestamptz(6)
+  renewal_mode         String        @default("append") @db.VarChar(20)
+  external_payment_ref String?       @db.VarChar(160)
+  notes                String?
+  created_by           String?       @db.Uuid
+  created_at           DateTime      @default(now()) @db.Timestamptz(6)
+  users                users?        @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  licenses             licenses      @relation(fields: [license_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([license_id, created_at(sort: Desc)], map: "idx_license_renewals_license")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model licenses {
+  id                           String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id              String               @db.Uuid
+  product_id                   String               @db.Uuid
+  customer_id                  String               @db.Uuid
+  plan_id                      String?              @db.Uuid
+  external_order_id            String?              @db.VarChar(120)
+  admin_status                 license_admin_status @default(pending)
+  duration_unit                duration_unit
+  duration_value               Int
+  start_policy                 start_policy         @default(on_first_activation)
+  timezone                     String               @default("UTC") @db.VarChar(64)
+  starts_at                    DateTime?            @db.Timestamptz(6)
+  expires_at                   DateTime?            @db.Timestamptz(6)
+  activation_deadline_at       DateTime?            @db.Timestamptz(6)
+  max_devices                  Int                  @default(1)
+  max_activation_count         Int?
+  activation_count             Int                  @default(0)
+  max_subjects                 Int?
+  refund_activation_on_release Boolean              @default(false)
+  offline_allowed              Boolean              @default(false)
+  offline_grace_seconds        Int                  @default(0)
+  feature_snapshot             Json                 @default("{}")
+  metadata                     Json                 @default("{}")
+  notes                        String?
+  created_by                   String?              @db.Uuid
+  created_at                   DateTime             @default(now()) @db.Timestamptz(6)
+  updated_at                   DateTime             @default(now()) @db.Timestamptz(6)
+  deleted_at                   DateTime?            @db.Timestamptz(6)
+  entitlements_version         Int                  @default(1)
+  activations                  activations[]
+  license_features             license_features[]
+  license_keys                 license_keys[]
+  license_renewals             license_renewals[]
+  users                        users?               @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  customers                    customers            @relation(fields: [customer_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+  plans                        plans?               @relation(fields: [plan_id, product_id, organization_id], references: [id, product_id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+  products                     products             @relation(fields: [product_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+  offline_grants               offline_grants[]
+
+  @@unique([id, organization_id])
+  @@unique([id, product_id, organization_id])
+  @@index([customer_id, created_at(sort: Desc)], map: "idx_licenses_customer")
+  @@index([expires_at], map: "idx_licenses_expiry", where: raw("(admin_status = ANY (ARRAY['pending'::license_admin_status, 'active'::license_admin_status]))"))
+  @@index([organization_id, external_order_id], map: "idx_licenses_external_order", where: raw("(external_order_id IS NOT NULL)"))
+  @@index([organization_id, product_id, admin_status, created_at(sort: Desc)], map: "idx_licenses_org_product_status")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model offline_grants {
+  id              String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String       @db.Uuid
+  license_id      String       @db.Uuid
+  activation_id   String       @db.Uuid
+  signing_key_id  String       @db.Uuid
+  serial          String       @unique @db.VarChar(100)
+  issued_at       DateTime     @db.Timestamptz(6)
+  valid_until     DateTime     @db.Timestamptz(6)
+  payload         Json
+  payload_hash    Bytes
+  signature       Bytes
+  revoked_at      DateTime?    @db.Timestamptz(6)
+  created_at      DateTime     @default(now()) @db.Timestamptz(6)
+  activations     activations  @relation(fields: [activation_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+  licenses        licenses     @relation(fields: [license_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+  signing_keys    signing_keys @relation(fields: [signing_key_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([license_id, valid_until(sort: Desc)], map: "idx_offline_grants_license")
+}
+
+model organization_memberships {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String        @db.Uuid
+  user_id         String        @db.Uuid
+  role_id         String        @db.Uuid
+  status          record_status @default(active)
+  created_at      DateTime      @default(now()) @db.Timestamptz(6)
+  organizations   organizations @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  roles           roles         @relation(fields: [role_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users           users         @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([organization_id, user_id])
+  @@index([user_id, status], map: "idx_memberships_user")
+}
+
+model organizations {
+  id                          String                        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                        String                        @db.VarChar(160)
+  slug                        String                        @unique @db.VarChar(80)
+  timezone                    String                        @default("UTC") @db.VarChar(64)
+  status                      record_status                 @default(active)
+  settings                    Json                          @default("{}")
+  created_at                  DateTime                      @default(now()) @db.Timestamptz(6)
+  updated_at                  DateTime                      @default(now()) @db.Timestamptz(6)
+  admin_sessions              admin_sessions[]
+  backup_job_targets          backup_job_targets[]
+  backup_jobs                 backup_jobs[]
+  backup_policies             backup_policies[]
+  backup_policy_targets       backup_policy_targets[]
+  backup_restore_tests        backup_restore_tests[]
+  backup_storage_credentials  backup_storage_credentials[]
+  backup_storage_destinations backup_storage_destinations[]
+  customers                   customers[]
+  organization_memberships    organization_memberships[]
+  products                    products[]
+  roles                       roles[]
+  server_assertion_jtis       server_assertion_jtis[]
+}
+
+model password_reset_tokens {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id    String    @db.Uuid
+  token_hash Bytes     @unique
+  expires_at DateTime  @db.Timestamptz(6)
+  used_at    DateTime? @db.Timestamptz(6)
+  created_at DateTime  @default(now()) @db.Timestamptz(6)
+  users      users     @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([user_id, created_at(sort: Desc)], map: "idx_password_reset_user")
+}
+
+model permissions {
+  code             String             @id @db.VarChar(120)
+  description      String             @db.VarChar(255)
+  role_permissions role_permissions[]
+}
+
+model plan_features {
+  plan_id          String           @db.Uuid
+  product_id       String           @db.Uuid
+  organization_id  String           @db.Uuid
+  feature_code     String           @db.VarChar(100)
+  feature_value    Json
+  plans            plans            @relation(fields: [plan_id, product_id, organization_id], references: [id, product_id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+  product_features product_features @relation(fields: [product_id, feature_code], references: [product_id, code], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([plan_id, feature_code])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model plans {
+  id                           String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id              String          @db.Uuid
+  product_id                   String          @db.Uuid
+  code                         String          @db.VarChar(80)
+  name                         String          @db.VarChar(160)
+  description                  String?
+  duration_unit                duration_unit
+  duration_value               Int             @default(0)
+  start_policy                 start_policy    @default(on_first_activation)
+  activation_deadline_days     Int?
+  max_devices                  Int             @default(1)
+  max_activation_count         Int?
+  max_subjects                 Int?
+  refund_activation_on_release Boolean         @default(false)
+  offline_allowed              Boolean         @default(false)
+  offline_grace_seconds        Int             @default(0)
+  default_features             Json            @default("{}")
+  status                       record_status   @default(active)
+  created_at                   DateTime        @default(now()) @db.Timestamptz(6)
+  updated_at                   DateTime        @default(now()) @db.Timestamptz(6)
+  licenses                     licenses[]
+  plan_features                plan_features[]
+  products                     products        @relation(fields: [product_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([id, product_id, organization_id])
+  @@unique([product_id, code])
+  @@index([product_id, status], map: "idx_plans_product_status")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model product_credentials {
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String          @db.Uuid
+  product_id      String          @db.Uuid
+  name            String          @db.VarChar(120)
+  credential_type credential_type
+  client_id       String          @unique @db.VarChar(100)
+  secret_hash     Bytes?
+  scopes          String[]        @default([])
+  allowed_origins String[]        @default([])
+  status          record_status   @default(active)
+  expires_at      DateTime?       @db.Timestamptz(6)
+  last_used_at    DateTime?       @db.Timestamptz(6)
+  created_at      DateTime        @default(now()) @db.Timestamptz(6)
+  rotated_at      DateTime?       @db.Timestamptz(6)
+  public_key      Bytes?
+  /// 凭证所属环境：production / sandbox（规格 27.3「独立产品凭证」）。
+  /// 运行时会校验「进程环境」与「凭证环境」一致，防止 Sandbox 凭证被拿到生产调用。
+  environment     credential_environment @default(production)
+  products        products        @relation(fields: [product_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([product_id, status], map: "idx_product_credentials_product")
+  @@index([environment], map: "idx_product_credentials_environment")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model product_features {
+  id               String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id  String             @db.Uuid
+  product_id       String             @db.Uuid
+  code             String             @db.VarChar(100)
+  name             String             @db.VarChar(160)
+  description      String?
+  value_type       String             @default("boolean") @db.VarChar(20)
+  default_value    Json               @default("true")
+  status           record_status      @default(active)
+  created_at       DateTime           @default(now()) @db.Timestamptz(6)
+  license_features license_features[]
+  plan_features    plan_features[]
+  products         products           @relation(fields: [product_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([id, product_id, organization_id])
+  @@unique([product_id, code])
+  @@index([product_id, status], map: "idx_product_features_product_status")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model products {
+  id                         String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id            String                  @db.Uuid
+  code                       String                  @db.VarChar(80)
+  name                       String                  @db.VarChar(160)
+  description                String?
+  product_type               product_type
+  status                     record_status           @default(active)
+  current_version            String?                 @db.VarChar(80)
+  supported_platforms        String[]                @default([])
+  heartbeat_interval_seconds Int                     @default(900)
+  access_token_ttl_seconds   Int                     @default(600)
+  policy                     Json                    @default("{}")
+  created_at                 DateTime                @default(now()) @db.Timestamptz(6)
+  updated_at                 DateTime                @default(now()) @db.Timestamptz(6)
+  activation_challenges      activation_challenges[]
+  activations                activations[]
+  customer_identities        customer_identities[]
+  devices                    devices[]
+  licenses                   licenses[]
+  plans                      plans[]
+  product_credentials        product_credentials[]
+  product_features           product_features[]
+  organizations              organizations           @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  server_assertion_jtis      server_assertion_jtis[]
+  signing_keys               signing_keys[]
+  webhook_endpoints          webhook_endpoints[]
+
+  @@unique([id, organization_id])
+  @@unique([organization_id, code])
+  @@index([organization_id, status, created_at(sort: Desc)], map: "idx_products_org_status")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model rate_limit_buckets {
+  bucket_key   String   @id @db.VarChar(240)
+  window_start DateTime @default(now()) @db.Timestamptz(6)
+  count        Int      @default(0)
+  expires_at   DateTime @db.Timestamptz(6)
+
+  @@index([expires_at], map: "idx_rate_limit_buckets_expires")
+}
+
+model role_permissions {
+  role_id         String      @db.Uuid
+  permission_code String      @db.VarChar(120)
+  permissions     permissions @relation(fields: [permission_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+  roles           roles       @relation(fields: [role_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([role_id, permission_code])
+}
+
+model roles {
+  id                       String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id          String?                    @db.Uuid
+  code                     String                     @db.VarChar(80)
+  name                     String                     @db.VarChar(120)
+  is_system                Boolean                    @default(false)
+  created_at               DateTime                   @default(now()) @db.Timestamptz(6)
+  organization_memberships organization_memberships[]
+  role_permissions         role_permissions[]
+  organizations            organizations?             @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([organization_id, code])
+}
+
+model server_assertion_jtis {
+  jti             String        @id @db.VarChar(120)
+  organization_id String        @db.Uuid
+  product_id      String        @db.Uuid
+  credential_id   String?       @db.Uuid
+  subject         String?       @db.VarChar(200)
+  seen_at         DateTime      @default(now()) @db.Timestamptz(6)
+  expires_at      DateTime      @db.Timestamptz(6)
+  organizations   organizations @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  products        products      @relation(fields: [product_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([expires_at], map: "idx_server_assertion_jtis_expires")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model signing_keys {
+  id              String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String             @db.Uuid
+  product_id      String?            @db.Uuid
+  kid             String             @unique @db.VarChar(100)
+  algorithm       String             @default("EdDSA") @db.VarChar(20)
+  public_key      Bytes
+  private_key_ref String
+  status          signing_key_status @default(staged)
+  not_before      DateTime           @db.Timestamptz(6)
+  not_after       DateTime?          @db.Timestamptz(6)
+  created_at      DateTime           @default(now()) @db.Timestamptz(6)
+  offline_grants  offline_grants[]
+  products        products?          @relation(fields: [product_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([product_id, status], map: "idx_signing_keys_product_status")
+}
+
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model users {
+  id                       String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email                    String                     @db.VarChar(254)
+  password_hash            String
+  display_name             String                     @db.VarChar(120)
+  status                   record_status              @default(active)
+  mfa_enabled              Boolean                    @default(false)
+  last_login_at            DateTime?                  @db.Timestamptz(6)
+  created_at               DateTime                   @default(now()) @db.Timestamptz(6)
+  updated_at               DateTime                   @default(now()) @db.Timestamptz(6)
+  mfa_secret_enc           String?
+  admin_sessions           admin_sessions[]
+  backup_jobs              backup_jobs[]
+  backup_restore_tests     backup_restore_tests[]
+  license_renewals         license_renewals[]
+  licenses                 licenses[]
+  organization_memberships organization_memberships[]
+  password_reset_tokens    password_reset_tokens[]
+}
+
+model webhook_deliveries {
+  id                String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  endpoint_id       String                  @db.Uuid
+  event_id          String                  @db.VarChar(100)
+  event_type        String                  @db.VarChar(100)
+  payload           Json
+  status            webhook_delivery_status @default(pending)
+  attempt_count     Int                     @default(0)
+  next_attempt_at   DateTime?               @db.Timestamptz(6)
+  response_status   Int?
+  last_error        String?
+  created_at        DateTime                @default(now()) @db.Timestamptz(6)
+  delivered_at      DateTime?               @db.Timestamptz(6)
+  webhook_endpoints webhook_endpoints       @relation(fields: [endpoint_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([endpoint_id, event_id])
+  @@index([status, next_attempt_at], map: "idx_webhook_deliveries_retry")
+}
+
+model webhook_endpoints {
+  id                 String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id    String               @db.Uuid
+  product_id         String               @db.Uuid
+  url                String
+  secret_hash        Bytes
+  event_types        String[]
+  status             record_status        @default(active)
+  created_at         DateTime             @default(now()) @db.Timestamptz(6)
+  secret_enc         String?
+  webhook_deliveries webhook_deliveries[]
+  products           products             @relation(fields: [product_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+enum activation_status {
+  active
+  released
+  revoked
+  blocked
+}
+
+enum backup_adapter_type {
+  native
+  rclone
+  mounted_filesystem
+}
+
+enum backup_auth_method {
+  access_key
+  username_password
+  ssh_key
+  oauth2
+  none
+}
+
+enum backup_job_status {
+  queued
+  running
+  partial
+  degraded
+  succeeded
+  failed
+}
+
+enum backup_provider_type {
+  local
+  s3
+  webdav
+  sftp
+  ftps
+  smb
+  google_drive
+  onedrive
+  dropbox
+  rclone_other
+}
+
+enum backup_restore_status {
+  queued
+  running
+  passed
+  failed
+}
+
+enum backup_target_mode {
+  all_required
+  primary_then_fallback
+  quorum
+}
+
+enum backup_target_status {
+  queued
+  uploading
+  uploaded
+  verifying
+  verified
+  failed
+  skipped
+}
+
+enum backup_test_status {
+  untested
+  passed
+  failed
+}
+
+enum backup_verify_mode {
+  sha256
+  sha256_and_manifest
+}
+
+enum credential_type {
+  public_client
+  confidential_server
+}
+
+/// 产品凭证的部署环境（规格 27.3）。沙箱凭证与生产凭证必须互不可用。
+enum credential_environment {
+  production
+  sandbox
+}
+
+enum duration_unit {
+  day
+  month
+  lifetime
+}
+
+enum identity_provider {
+  wechat_mini_program
+  google
+  microsoft
+  email
+  phone
+  custom
+}
+
+enum identity_status {
+  active
+  disabled
+  unlinked
+}
+
+enum license_admin_status {
+  draft
+  pending
+  active
+  suspended
+  revoked
+  cancelled
+}
+
+enum product_type {
+  desktop
+  browser_extension
+  mini_program
+  web
+  server
+  other
+}
+
+enum record_status {
+  active
+  disabled
+  archived
+}
+
+enum signing_key_status {
+  staged
+  active
+  retiring
+  revoked
+}
+
+enum start_policy {
+  on_first_activation
+  fixed_start
+}
+
+enum webhook_delivery_status {
+  pending
+  delivering
+  succeeded
+  failed
+  dead
+}

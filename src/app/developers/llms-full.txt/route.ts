@@ -1,0 +1,16 @@
+import { buildLlmsFull } from "@/lib/developers/llms-generator";
+
+/**
+ * GET /developers/llms-full.txt —— 给 AI 助手的完整契约文件（规格 27.17）。
+ *
+ * 正文在请求时从 OpenAPI 契约与代码常量生成，不做静态缓存：
+ * 契约变了却因为缓存继续下发旧端点表，比慢几毫秒严重得多。
+ */
+export async function GET() {
+  return new Response(buildLlmsFull(), {
+    headers: {
+      "content-type": "text/plain; charset=utf-8",
+      "cache-control": "public, max-age=0, must-revalidate",
+    },
+  });
+}

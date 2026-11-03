@@ -1,0 +1,63 @@
+# 本地 / 单机部署用的 compose 示例（规格 13）。
+#
+# 注意：这台机器上已经有一个 systemd 管理的 PostgreSQL 容器 `licensing-pg`
+# （127.0.0.1:55432）。**不要在这个目录直接 `docker compose up` 起第二套 PG**，
+# 否则会出现两个数据库、数据对不上。如果确实要用 compose 起整套，
+# 请先停掉 systemd 实例，并把下面 postgres 的端口改到空闲端口。
+#
+# 日常运维仍然推荐 systemd（本机已验证）：
+#   systemctl status licensing-saas licensing-saas-sandbox
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: licensing-pg-compose
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-licensing}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 里设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-licensing}
+    ports:
+      # 默认 55433，避开本机已有 licensing-pg 的 55432
+      - "127.0.0.1:${POSTGRES_PORT:-55433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-licensing} -d ${POSTGRES_DB:-licensing}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: licensing-saas:1.5
+    container_name: licensing-saas-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-production}
+      LICENSE_DB_URL: postgresql://${POSTGRES_USER:-licensing}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-licensing}?schema=public
+      SESSION_SECRET: ${SESSION_SECRET:?缺少 SESSION_SECRET}
+      LICENSE_HMAC_PEPPER: ${LICENSE_HMAC_PEPPER:?缺少 LICENSE_HMAC_PEPPER}
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:?缺少 BACKUP_ENCRYPTION_KEY}
+      APP_BASE_URL: ${APP_BASE_URL:-http://127.0.0.1:3200}
+      ASSERTION_AUDIENCE: ${ASSERTION_AUDIENCE:-license-api}
+      SIGNING_KEY_DIR: /app/.keys
+      BACKUP_LOCAL_DIR: /app/.backups
+      DEV_MAIL_SINK: "false"
+    ports:
+      - "127.0.0.1:${APP_PORT:-3200}:3000"
+    volumes:
+      # 签名私钥与本地备份必须落在持久卷上，容器重建不丢
+      - signing-keys:/app/.keys
+      - local-backups:/app/.backups
+
+volumes:
+  pgdata:
+  signing-keys:
+  local-backups:

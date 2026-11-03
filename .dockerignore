@@ -1,0 +1,16 @@
+node_modules
+.next
+.git
+.dsh-uploads
+.dsh
+.keys
+.keys-sandbox
+.backups
+.backups-sandbox
+docs/shots
+tests/e2e/**/*.png
+test-results
+playwright-report
+*.log
+tmp
+.DS_Store
