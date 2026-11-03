@@ -107,3 +107,19 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:3101/api/v1/li
 - WAL/PITR 与月度自动恢复演练；
 - **异地备份目标尚未接入**（当前只有 local 目标 + 每日 03:00 策略，已实跑验证；S3/WebDAV/SFTP 需真实凭据后加为第二目标）；
 - **HTTPS 证书**（`<你的域名>` 目前只有 80，需从 1Panel 申请证书后加 443 server）。
+
+---
+
+## 端到端冒烟（2026-11-03，沙箱实例 3101）
+
+按规格 27.8 的六行规范化消息与 4.6 的签名激活流程，用真实 Ed25519 密钥走了一遍完整链路：
+
+| 步骤 | 结果 |
+| --- | --- |
+| `POST /api/v1/activation-challenges` | 200，`canonical_version=v1`，消息首行为 `LICENSE-ACTIVATION-CHALLENGE-V1`，共 6 行 |
+| 本地对 canonical_message 签名（ed25519，无摘要） | `signature` base64url 86 字符 |
+| `POST /api/v1/activations` | 200，`effective_status=active`、`entitlements_version=1`、`heartbeat_interval_seconds=900`、`device_limit={max:2,active:1}`、4 条 entitlements |
+| `POST /api/v1/activations/heartbeat`（带 refresh_token） | 200，`next_heartbeat_seconds=900`，返回轮换后的新 refresh_token |
+| 用**旧的** refresh_token 再打一次 | 401 `CLIENT_AUTH_FAILED`「refresh_token 已使用过，存在重放风险，令牌族已吊销」——重放检测生效 |
+
+测试授权已撤销；生产库数据未受影响（licenses 240 / license_keys 232 / activations 444）。
