@@ -177,10 +177,25 @@ export function spkiDerToRaw(der: Buffer): Buffer {
   return der.subarray(der.length - RAW_KEY_LENGTH);
 }
 
-/** 校验一段 DER 能否被 Node 解析为 Ed25519 公钥（用于自检与测试）。 */
+/**
+ * 校验一段 DER 能否被 Node 解析为 Ed25519 公钥。
+ *
+ * 入参来自调用方（管理端登记公钥），所以任何解析失败都必须变成 400 而不是 500：
+ * `createPublicKey` 对畸形 DER 会直接抛原生 `Error: Failed to read asymmetric key`，
+ * 不包成 ApiError 的话会一路冒泡成「服务端内部错误」，把用户的输入问题伪装成我们的 bug。
+ */
 export function assertEd25519PublicKey(der: Buffer): void {
-  const key = createPublicKey({ key: der, format: "der", type: "spki" });
+  let key: KeyObject;
+  try {
+    key = createPublicKey({ key: der, format: "der", type: "spki" });
+  } catch {
+    throw new ApiError(
+      400,
+      "INVALID_REQUEST",
+      "publicKey 不是合法的 Ed25519 SPKI DER 公钥（请确认是标准导出的 44 字节 SPKI，而不是随机字节）",
+    );
+  }
   if (key.asymmetricKeyType !== "ed25519") {
-    throw new ApiError(500, "SIGNING_KEY_INVALID", "公钥不是 Ed25519");
+    throw new ApiError(400, "INVALID_REQUEST", "publicKey 不是 Ed25519 公钥");
   }
 }

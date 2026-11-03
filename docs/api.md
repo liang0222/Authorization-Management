@@ -202,7 +202,7 @@ curl -s "http://127.0.0.1:3100/api/v1/admin/licenses?limit=20&cursor=c1.…" -b 
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET/POST | `/admin/credentials` | `credential:read` / `credential:write` | `secret` 只存 SHA-256，明文仅在创建/轮换时返回一次 |
+| GET/POST | `/admin/credentials` | `credential:read` / `credential:write` | `secret` 只存 SHA-256，明文仅在创建/轮换时返回一次；机密服务端凭证必须带 Ed25519 公钥——创建时可传 `publicKey`（base64url，44 字节 SPKI DER 或 32 字节裸公钥），留空则由服务端生成密钥对并在响应里一次性返回 `privateKeyPem` |
 | PATCH | `/admin/credentials/[id]` | `credential:write` | `action`: `rotate`（仅 confidential_server）/ `disable` / `enable` / `update` |
 | DELETE | `/admin/credentials/[id]` | `credential:write` | 归档 |
 | GET/POST | `/admin/signing-keys` | `signingkey:read` / `signingkey:write` | 指纹 = SHA-256 前 16 字节 hex；私钥写 `.keys/<kid>.pem`，权限 0600 |

@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { config } from "@/lib/config";
@@ -8,6 +8,7 @@ import { ApiError, okResponse, pageResult, readJson, readListQuery } from "@/lib
 import { translatePrismaError } from "@/lib/http/db-errors";
 import { writeAudit } from "@/lib/domain/audit";
 import { generateClientId, generateClientSecret } from "@/lib/domain/license-key";
+import { assertEd25519PublicKey, rawToSpkiDer } from "@/lib/domain/signing-key";
 
 /**
  * 产品凭证（规格 4.5 / 6.1）：
@@ -39,6 +40,12 @@ const createSchema = z.object({
     .array(z.string().trim().url("来源地址必须是合法 URL").max(500))
     .max(20)
     .default([]),
+  /**
+   * 机密服务端凭证的 Ed25519 公钥，base64url 编码。
+   * 接受两种输入：44 字节 SPKI DER（标准），或 32 字节裸公钥（部分平台只导出裸钥）。
+   * 私钥由调用方自己保管，服务端只存公钥 —— 这是 private_key_jwt 的前提。
+   */
+  publicKey: z.string().trim().min(1).max(200).optional(),
 });
 
 export async function GET(req: NextRequest) {
@@ -140,6 +147,36 @@ export async function POST(req: NextRequest) {
     const clientSecret = body.type === "confidential_server" ? generateClientSecret() : null;
     const secretHash = clientSecret ? createHash("sha256").update(clientSecret).digest() : null;
 
+    /**
+     * 机密服务端凭证必须有公钥：`product_credentials_server_pubkey_ck` 这条 CHECK 约束
+     * 要求 credential_type='confidential_server' 时 public_key 非空，而 private_key_jwt
+     * 验签也必须有公钥。不传就现场生成一对，把私钥一次性返回给调用方保存。
+     */
+    let publicKeyDer: Buffer | null = null;
+    let generatedPrivateKey: string | null = null;
+    if (body.type === "confidential_server") {
+      if (body.publicKey) {
+        const bytes = Buffer.from(body.publicKey, "base64url");
+        if (bytes.length === 44) {
+          assertEd25519PublicKey(bytes);
+          publicKeyDer = bytes;
+        } else if (bytes.length === 32) {
+          publicKeyDer = rawToSpkiDer(bytes);
+        } else {
+          throw new ApiError(
+            400,
+            "INVALID_REQUEST",
+            "publicKey 必须是 base64url 编码的 Ed25519 公钥（44 字节 SPKI DER 或 32 字节裸公钥）",
+          );
+        }
+      } else {
+        // 未提供公钥：服务端生成一对，私钥只在这条响应里出现一次。
+        const pair = generateKeyPairSync("ed25519");
+        publicKeyDer = Buffer.from(pair.publicKey.export({ type: "spki", format: "der" }));
+        generatedPrivateKey = pair.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+      }
+    }
+
     try {
       const created = await prisma.product_credentials.create({
         data: {
@@ -154,6 +191,9 @@ export async function POST(req: NextRequest) {
           status: "active",
           // 在哪个环境里创建就属于哪个环境，不允许管理端跨环境写凭证。
           environment: config.credentialEnvironment,
+          // 复制成独立的 Uint8Array<ArrayBuffer>：Buffer 底层可能共享 ArrayBuffer，
+          // Prisma 生成的 Bytes 列类型要求独立视图，直接传 Buffer 会 TS2322。
+          public_key: publicKeyDer ? new Uint8Array(publicKeyDer) : null,
         },
       });
 
@@ -189,9 +229,20 @@ export async function POST(req: NextRequest) {
           allowedOrigins: created.allowed_origins,
           status: created.status,
           createdAt: created.created_at.toISOString(),
+          /** 公钥指纹，用于和调用方手里的私钥做人工核对。 */
+          publicKeyFingerprint: publicKeyDer
+            ? `sha256:${createHash("sha256").update(publicKeyDer).digest("base64url").slice(0, 32)}`
+            : null,
+          /** 仅在「未提供 publicKey、由服务端生成」时返回一次，之后无法再取。 */
+          privateKeyPem: generatedPrivateKey,
           secretNotice: clientSecret
             ? "clientSecret 仅显示一次，请立即保存到服务端密钥管理，丢失后只能轮换"
             : "公开客户端凭证不持有密钥",
+          publicKeyNotice: publicKeyDer
+            ? generatedPrivateKey
+              ? "服务端已生成 Ed25519 密钥对：privateKeyPem 仅显示一次，请立即保存；丢失后只能重新创建凭证"
+              : "已登记调用方提供的公钥，私钥应只存在于调用方服务器"
+            : null,
         },
         requestId,
         { status: 201 },

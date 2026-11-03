@@ -62,6 +62,21 @@ export interface CredentialRow {
 
 const DEFAULT_SCOPES = ["license:validate", "activation:create", "activation:heartbeat", "entitlements:read"];
 
+/**
+ * 创建凭证的响应。
+ * - `clientSecret`：机密服务端凭证的共享密钥，仅此一次。
+ * - `privateKeyPem`：**仅在服务端代为生成密钥对时**返回的 Ed25519 私钥，同样仅此一次。
+ * - `publicKeyFingerprint`：公钥指纹，用于和调用方手里的私钥人工核对。
+ */
+interface CreateCredentialResult {
+  clientId: string;
+  clientSecret?: string | null;
+  secretNotice?: string;
+  privateKeyPem?: string | null;
+  publicKeyFingerprint?: string | null;
+  publicKeyNotice?: string | null;
+}
+
 /** 新建凭证：机密服务端凭证会一次性返回 clientSecret，公开客户端只有 clientId。 */
 export function CreateCredentialDialog({
   open,
@@ -79,10 +94,11 @@ export function CreateCredentialDialog({
   const [type, setType] = useState("public_client");
   const [scopes, setScopes] = useState<string[]>(DEFAULT_SCOPES);
   const [origins, setOrigins] = useState("");
+  const [publicKey, setPublicKey] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [result, setResult] = useState<{ clientId: string; clientSecret?: string; secretNotice?: string } | null>(null);
+  const [result, setResult] = useState<CreateCredentialResult | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -91,6 +107,7 @@ export function CreateCredentialDialog({
     setType("public_client");
     setScopes(DEFAULT_SCOPES);
     setOrigins("");
+    setPublicKey("");
     setError(null);
     setFieldErrors({});
     setResult(null);
@@ -113,16 +130,31 @@ export function CreateCredentialDialog({
               .split(/[\s,]+/)
               .map((item) => item.trim())
               .filter(Boolean);
-      const data = await apiRequest<{ clientId: string; clientSecret?: string; secretNotice?: string }>(
+      const data = await apiRequest<CreateCredentialResult>(
         "/api/v1/admin/credentials",
         {
           method: "POST",
-          body: { name: name.trim(), productId, type, scopes, allowedOrigins },
+          body: {
+            name: name.trim(),
+            productId,
+            type,
+            scopes,
+            allowedOrigins,
+            // 只有机密服务端凭证需要公钥；留空时服务端会生成一对并把私钥一次性返回。
+            ...(type === "confidential_server" && publicKey.trim()
+              ? { publicKey: publicKey.trim() }
+              : {}),
+          },
         },
       );
       setResult(data);
       onCreated();
-      toast.success("API 凭证已创建", { description: `${name} 现在可以调用对应产品的客户端接口。` });
+      toast.success("API 凭证已创建", {
+        description:
+          type === "confidential_server"
+            ? `${name} 现在可以用 Ed25519 私钥签名调用服务端接口。`
+            : `${name} 现在可以调用对应产品的客户端接口。`,
+      });
     } catch (err) {
       if (err instanceof ClientApiError) setFieldErrors(err.fieldErrors);
       setError(errorMessage(err));
@@ -139,7 +171,7 @@ export function CreateCredentialDialog({
           <DialogDescription>
             {result
               ? "密钥只在这里显示一次，请立即复制到客户端配置中。"
-              : "公开客户端用于桌面端 / 扩展 / 小程序，机密服务端用于自有后端。服务端只保存密钥哈希。"}
+              : "公开客户端用于桌面端 / 扩展 / 小程序，机密服务端用于自有后端，鉴权靠 Ed25519 私钥签名（private_key_jwt），服务端只存公钥。"}
           </DialogDescription>
         </DialogHeader>
 
@@ -147,19 +179,42 @@ export function CreateCredentialDialog({
           <div className="space-y-4">
             <SecretReveal
               title="凭证信息"
-              description={result.secretNotice ?? "请把下面两项写入客户端配置。"}
+              description={result.secretNotice ?? "请把下面几项写入客户端配置。"}
               secrets={[
                 { label: "client_id（可公开）", value: result.clientId, hint: "随请求头发送 x-client-id" },
                 ...(result.clientSecret
                   ? [{ label: "client_secret（仅显示一次）", value: result.clientSecret, hint: "服务端换取令牌时使用" }]
                   : []),
+                ...(result.privateKeyPem
+                  ? [
+                      {
+                        label: "Ed25519 私钥（仅显示一次）",
+                        value: result.privateKeyPem,
+                        hint: "PKCS#8 PEM，服务端断言签名用；不要放进客户端或前端代码",
+                      },
+                    ]
+                  : []),
+                ...(result.publicKeyFingerprint
+                  ? [
+                      {
+                        label: "公钥指纹",
+                        value: result.publicKeyFingerprint,
+                        hint: "可与本地私钥导出的公钥做人工核对",
+                      },
+                    ]
+                  : []),
               ]}
               warning={
-                result.clientSecret
-                  ? "关闭后无法再次查看明文。如需更换，请对这条凭证执行「轮换密钥」。"
-                  : "公开客户端没有密钥，安全性依赖客户端签名（Ed25519 设备密钥）。"
+                result.privateKeyPem
+                  ? "私钥只在这一屏出现一次，关闭后无法再取。丢失后只能重新创建凭证并重新登记公钥。"
+                  : result.clientSecret
+                    ? "关闭后无法再次查看明文。如需更换，请对这条凭证执行「轮换密钥」。"
+                    : "公开客户端没有密钥，安全性依赖客户端签名（Ed25519 设备密钥）。"
               }
             />
+            {result.publicKeyNotice ? (
+              <p className="text-[11px] leading-relaxed text-muted-foreground">{result.publicKeyNotice}</p>
+            ) : null}
             <DialogFooter>
               <Button size="sm" onClick={() => onOpenChange(false)}>
                 完成
@@ -203,7 +258,7 @@ export function CreateCredentialDialog({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="public_client">公开客户端（无密钥，设备签名鉴权）</SelectItem>
-                  <SelectItem value="confidential_server">机密服务端（client_secret 鉴权）</SelectItem>
+                  <SelectItem value="confidential_server">机密服务端（Ed25519 断言鉴权）</SelectItem>
                 </SelectContent>
               </Select>
             </FormField>
@@ -230,20 +285,41 @@ export function CreateCredentialDialog({
             </FormField>
 
             {type === "confidential_server" ? (
-              <FormField
-                label="允许来源"
-                htmlFor="credential-origins"
-                error={fieldErrors.allowedOrigins}
-                hint="可选，逗号或换行分隔；留空表示不限制来源。"
-              >
-                <Input
-                  id="credential-origins"
-                  value={origins}
-                  onChange={(event) => setOrigins(event.target.value)}
-                  placeholder="https://app.example.com"
-                  className="font-mono text-xs"
-                />
-              </FormField>
+              <>
+                <FormField
+                  label="Ed25519 公钥"
+                  htmlFor="credential-public-key"
+                  error={fieldErrors.publicKey}
+                  hint="可选。base64url 编码的 44 字节 SPKI DER 或 32 字节裸公钥；留空则由服务端生成密钥对，私钥只返回一次。"
+                >
+                  <Input
+                    id="credential-public-key"
+                    value={publicKey}
+                    onChange={(event) => setPublicKey(event.target.value)}
+                    placeholder="MCowBQYDK2VwAyEA…（留空即由服务端生成）"
+                    className="font-mono text-xs"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </FormField>
+                <FormHint>
+                  私钥必须留在你自己的服务器上。填了公钥，服务端只存公钥、不返回私钥；不填则私钥在这条响应里出现一次。
+                </FormHint>
+                <FormField
+                  label="允许来源"
+                  htmlFor="credential-origins"
+                  error={fieldErrors.allowedOrigins}
+                  hint="可选，逗号或换行分隔；留空表示不限制来源。"
+                >
+                  <Input
+                    id="credential-origins"
+                    value={origins}
+                    onChange={(event) => setOrigins(event.target.value)}
+                    placeholder="https://app.example.com"
+                    className="font-mono text-xs"
+                  />
+                </FormField>
+              </>
             ) : (
               <FormHint>公开客户端不能配置允许来源，接口会直接拒绝这类请求。</FormHint>
             )}
