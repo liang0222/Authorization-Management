@@ -27,8 +27,23 @@
 | `customers` | 合作期间 + 2 年 | 删除走匿名化，不物理删除授权与审计记录 |
 | 备份包 | 按策略 `retention`（默认 7 日 / 4 周 / 3 月） | 加密存储，过期由保留策略清理 |
 
-清理任务当前为**手工/外部调度**（见 `docs/operations.md` §5），未内置定时清理 worker。
-这是已知缺口，写在这里而不是假装有。
+清理由 `scripts/retention-cleanup.mts` 执行，默认 dry-run，`--apply` 才删：
+
+```bash
+npx tsx scripts/retention-cleanup.mts           # 先看会删多少
+npx tsx scripts/retention-cleanup.mts --apply   # 真删
+```
+
+已装 systemd timer `licensing-saas-retention.timer`（每日 04:30，`Persistent=true` 补跑，
+`RandomizedDelaySec=300` 错峰）。查看与手动触发：
+
+```bash
+systemctl list-timers licensing-saas-retention.timer
+systemctl start licensing-saas-retention.service
+journalctl -u licensing-saas-retention.service -n 20 --no-pager
+```
+
+`audit_logs` 不在清理范围内（3 年合规留档），备份包过期由备份保留策略处理。
 
 ## 3. 脱敏
 

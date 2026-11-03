@@ -141,9 +141,13 @@ curl -fsS http://127.0.0.1:3100/health/ready     # 看 database 组件
 | 周期 | 任务 |
 | --- | --- |
 | 每日 | 看 `/health/ready`、备份作业是否 `succeeded`、`/metrics` 的成功率与 P95 |
+| 每日（自动 04:30） | 数据保留清理已由 `licensing-saas-retention.timer` 执行；要复核先跑 `npx tsx scripts/retention-cleanup.mts`（dry-run） |
 | 每周 | 检查 `webhook_deliveries` 的 dead 数量、磁盘余量、`audit_logs` 异常动作 |
 | 每月 | 跑一次隔离恢复演练（`POST /admin/backups/jobs/{id}/restore-test`）、核对离线密钥副本 |
 | 每季 | 轮换 `METRICS_TOKEN`、复核管理员权限与 MFA 状态、跑 `npm audit` |
 
-**未内置的定时任务**：日志保留清理、月度演练提醒。需要外部 cron 或人工执行，
-不要假设系统会自动做（`backup_policies` 的 cron 只调度备份，不调度清理）。
+**已内置的定时任务**：备份调度（`backup_policies.schedule_cron`，30s tick）、数据保留清理
+（`licensing-saas-retention.timer`，每日 04:30）、Webhook 投递（5s 轮询）。
+
+**仍未内置的定时任务**：月度恢复演练提醒、证书到期提醒。需要外部 cron 或人工执行，
+不要假设系统会自动做。

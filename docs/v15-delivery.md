@@ -101,7 +101,7 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:3101/api/v1/li
 仍未实现（明确记录，不假装完成）：
 
 - 登录异常与跨租户越权的实时告警（只有备份链路的告警）；
-- 日志保留期的自动清理任务（需外部 cron）；
+- ~~日志保留期的自动清理任务（需外部 cron）~~ → 已补：`scripts/retention-cleanup.mts` + `licensing-saas-retention.timer`（每日 04:30）；
 - 状态页的维护公告后台（`/developers/status` 只显示聚合指标）；
-- 会话列表与「撤销其他设备」界面（改密会撤销其他会话，但没有独立入口）；
+- ~~会话列表与「撤销其他设备」界面~~ → 已补：`GET/DELETE /api/v1/admin/me/sessions` + 个人设置页「登录会话」区；
 - WAL/PITR 与月度自动恢复演练。
