@@ -78,10 +78,19 @@ export class WebDavAdapter implements StorageAdapter {
     let current = "";
     for (const segment of segments) {
       current = current ? `${current}/${segment}` : segment;
+      const requested = this.urlFor(current);
       const response = await this.request("MKCOL", current);
       // 201 = 新建成功，405 = 已存在（RFC 4918），409 = 部分服务端（如 Apache mod_dav）
       // 对「父目录已存在」也返回 409。三者都表示「目录已经可用」，不该中断连接测试。
-      if (response.status !== 201 && response.status !== 405 && response.status !== 409) {
+      //
+      // 301/308：Apache（bytemark/webdav 就是）对「已存在的集合 + 无尾斜杠」会走 mod_dir
+      // 的 DirectorySlash，把 MKCOL 也重定向到 `<path>/`。这同样是「目录已存在」的证据。
+      // 但 request() 是 redirect:"manual"（跳别的主机等于把备份送给别人），所以这里必须
+      // 自己判定：只有同源、且 Location 就是当前路径加一个尾斜杠时才接受，其余一律当失败。
+      const slashRedirect =
+        (response.status === 301 || response.status === 308) &&
+        isSameOriginTrailingSlashRedirect(response.headers.get("location"), requested);
+      if (response.status !== 201 && response.status !== 405 && response.status !== 409 && !slashRedirect) {
         throw new BackupAdapterError("WEBDAV_MKCOL_FAILED", `创建目录失败：${current}（HTTP ${response.status}）`);
       }
     }
@@ -89,7 +98,8 @@ export class WebDavAdapter implements StorageAdapter {
 
   async test(): Promise<Array<{ step: string; ok: boolean; detail?: string }>> {
     const steps: Array<{ step: string; ok: boolean; detail?: string }> = [];
-    const probePath = `${this.options.prefix.replace(/^\/|\/$/g, "")}/_probe/${PROBE_FILE}`;
+    // 探针路径相对于 root_path；urlFor() 会补上前缀。自己再拼一遍会叠成 /upload/upload/。
+    const probePath = `_probe/${PROBE_FILE}`;
     const payload = Buffer.from(`ziming probe ${new Date().toISOString()}`, "utf8");
 
     try {
@@ -119,7 +129,9 @@ export class WebDavAdapter implements StorageAdapter {
 
   async put(remotePath: string, body: Buffer): Promise<PutResult> {
     const parent = remotePath.split("/").slice(0, -1).join("/");
-    if (parent) await this.ensureDirectory(`${this.options.prefix.replace(/^\/|\/$/g, "")}/${parent}`);
+    // ensureDirectory 内部经 request() -> urlFor() 已经补了 root_path 前缀，
+    // 这里传相对路径即可，再拼一次 prefix 会得到 /upload/upload/... 
+    if (parent) await this.ensureDirectory(parent);
     const response = await this.request("PUT", remotePath, body, { "content-type": "application/octet-stream" });
     if (response.status >= 300) {
       throw new BackupAdapterError("WEBDAV_PUT_FAILED", `上传失败：HTTP ${response.status}`, response.status >= 500);
@@ -146,6 +158,30 @@ export class WebDavAdapter implements StorageAdapter {
   async capabilities(): Promise<Record<string, boolean>> {
     // 未实测的一律不标 true（规格 16.11.1：不得把未测连接器标为「已支持」）。
     return { versioning: false, object_lock: false, atomic_move: false, checksum_native: false };
+  }
+}
+
+/**
+ * MKCOL 收到 301/308 时判定它是不是「集合已存在」的信号。
+ *
+ * Apache（bytemark/webdav 就是）对「已存在的集合 + 请求路径无尾斜杠」会走 mod_dir 的
+ * DirectorySlash，连 MKCOL 也一起重定向到 `<path>/`。这属于 RFC 4918 之外的实现差异，
+ * 但语义上等于「目录已存在」，不该让整个备份失败。
+ *
+ * 之所以要判得这么细：`request()` 是 `redirect: "manual"`，因为跟随重定向可能把带
+ * Basic Auth 的请求送到别的主机。所以我们只接受「同源 + 路径就是自己加一个尾斜杠」，
+ * 任何跨主机、跨路径的跳转仍然按失败处理。
+ */
+export function isSameOriginTrailingSlashRedirect(location: string | null, requested: string): boolean {
+  if (!location) return false;
+  try {
+    const target = new URL(location, requested);
+    const origin = new URL(requested);
+    if (target.origin !== origin.origin) return false;
+    const normalize = (value: string): string => value.replace(/\/+$/, "");
+    return normalize(target.pathname) === normalize(origin.pathname);
+  } catch {
+    return false;
   }
 }
 

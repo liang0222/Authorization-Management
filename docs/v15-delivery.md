@@ -19,7 +19,8 @@
 | P0-7b | **Webhook SSRF 防护** | `src/lib/domain/outbound-url.ts`、`outbound-http.ts` | 建端点时拒绝私网/元数据段；投递时 `safeLookup` 解析后逐 IP 校验、不跟随重定向、`agent:false`。实测 10.0.0.0/8、192.168/16、169.254.169.254、非回环 http 全部 400 |
 | P0-8 | 六语言接入示例（27.7） | `sdk-examples/{python,node,php,go,java,csharp}` | 默认值已清空真实 client_id；`python -m py_compile` / `node --check` 通过；README 标注 Preview 与实测坑 |
 | P0-9 | Sandbox / Production 真隔离（27.3） | `deployment-environment.ts`、`licensing-saas-sandbox.service`、`scripts/sandbox-bootstrap.sh` | 独立库 `licensing_sandbox`、独立 `.keys-sandbox`、独立 `.backups-sandbox`、独立凭证池（`environment` 列）、独立限流命名空间。四组交叉验证全部符合预期 |
-| P0-10 | 多协议异地备份（16.11） | `src/lib/services/backup/**` | Local/S3/WebDAV/SFTP 四个适配器真连通过；三目标同一份备份 sha256 全等；`verify` 与 `restore-test` 全绿 |
+| P0-10 | 多协议异地备份（16.11） | `src/lib/services/backup/**` | Local/S3/WebDAV/SFTP 四个适配器真连通过，接入同一策略四目标；同一份备份四目标 `checksumSha256` 全等（最近一轮 `d74fb0ea…2d7e`，四份容器内 `sha256sum` 独立复核一致、魔数均为 `ZMBK1`）；从 S3 远端字节独立解密 → `pg_restore` 41 表 / 240 授权行数与生产一致；`verify` 与 `restore-test` 全绿 |
+| P0-10b | SFTP/WebDAV 远端路径前缀双拼 | `backup/runner.ts`、`backup/factory.ts`、两个 adapter | `remote_prefix` 被 runner 与 adapter 各拼一次，SFTP 落成 `/upload/backups/offsite/backups/offsite/`。改为 runner 出 `backupObjectKey()`、adapter 只管 `root_path`，adapter 内探针路径不再自拼 prefix；补 4 条防回归单测 |
 | P0-11 | 备份与灾备后台页 | `src/app/app/settings/backups/page.tsx` | 目标/策略/作业/演练四个页签齐备；策略返回 `scheduleText` 与 `nextRunAt` |
 | P0-12 | **备份定时调度器** | `src/lib/services/backup/scheduler.ts` | 30s tick + advisory lock；实测把 cron 改 `* * * * *` 后 35s 内生成 `trigger:"scheduled"` 作业，改回后不再触发 |
 | P0-13 | **备份失败告警** | `src/lib/services/backup/alerts.ts` | 审计 `backup.job_failed` / `backup.schedule_skipped` + `console.error` + 可选 `BACKUP_ALERT_WEBHOOK_URL`；另含本地磁盘水位检查 |
@@ -48,7 +49,7 @@
 | P1-11 | ESLint 存量 48 错 | 全是 `react-hooks/*`（React Compiler 规则）与 1 个 `any` | CI 里 `continue-on-error`，不掩盖；逐页重构再收紧 |
 | P1-12 | 游标仍是签名 offset | 深翻页仍随 offset 增大而变慢 | 改 keyset（需逐表定义稳定排序键 + tie-breaker） |
 | P1-13 | PHP/Go/Java/C# 示例本机未编译 | 本机无 php/go/javac/mcs | 在 CI 矩阵里补四个语言 job |
-| P1-14 | 备份只验证过本机临时容器 | S3/WebDAV/SFTP 容器已删除 | 上线前对真实异地存储再跑一遍连接/上传/下载/演练 |
+| P1-14 | 备份只验证过本机临时容器 | S3/WebDAV/SFTP 目标容器均跑在本机（非跨机房） | 把任一目标改填外部端点与凭据即可满足规格 24，策略与 `remotePrefix` 不用动 |
 | P2-1 | FTPS / SMB / 云盘 / rsync / C++ SDK | 未实现 | 按 16.11.1 / 27.7 排在 P2 |
 
 ## 4. 本轮修复的真实缺陷（不是新功能）
@@ -105,8 +106,8 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:3101/api/v1/li
 - 状态页的维护公告后台（`/developers/status` 只显示聚合指标）；
 - ~~会话列表与「撤销其他设备」界面~~ → 已补：`GET/DELETE /api/v1/admin/me/sessions` + 个人设置页「登录会话」区；
 - WAL/PITR 与月度自动恢复演练；
-- **异地备份目标尚未接入**（当前只有 local 目标 + 每日 03:00 策略，已实跑验证；S3/WebDAV/SFTP 需真实凭据后加为第二目标）；
-- **HTTPS 证书**（`<你的域名>` 目前只有 80，需从 1Panel 申请证书后加 443 server）。
+- ~~异地备份目标尚未接入~~ → **已接入**：策略 `daily-production` 现有四个目标（local / S3 / SFTP / WebDAV），全部 `verified`、sha256 全等，并已从 S3 远端字节独立解密恢复到临时库对账通过。**但四个目标都运行在本机 Docker 容器内**（`licensing-offsite-s3` / `-sftp` / `-webdav`），属于同机冗余而非跨机房异地——真正异地只需把目标 `endpointUrl` 与凭据换成外部存储，代码无需改动；
+- ~~**HTTPS 证书**（`<你的域名>` 目前只有 80…）~~ → **已完成**：Let's Encrypt 证书装到 openresty，80 全量 301 到 https，443 提供 HTTP/2 + HSTS，`openssl s_client` 验签 `Verify return code: 0 (ok)`，`/metrics` 公网 403，ACME 挑战路径仍可用，`[同机其他站点]` 未受影响；
 
 ---
 

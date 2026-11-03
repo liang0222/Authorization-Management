@@ -71,7 +71,10 @@ export class SftpAdapter implements StorageAdapter {
   async test(): Promise<Array<{ step: string; ok: boolean; detail?: string }>> {
     const steps: Array<{ step: string; ok: boolean; detail?: string }> = [];
     let client: Client | null = null;
-    const probePath = `${this.options.prefix.replace(/^\/|\/$/g, "")}/_probe/connectivity.txt`;
+    // 探针路径必须是「相对于 root_path」的，remotePath() 负责补上 root_path 前缀。
+    // 以前这里自己又拼了一次 prefix，于是探针实际落在 /upload/upload/_probe/ 下，
+    // 测试通过但位置是错的。
+    const probePath = "_probe/connectivity.txt";
     const payload = Buffer.from(`ziming probe ${new Date().toISOString()}`, "utf8");
 
     try {

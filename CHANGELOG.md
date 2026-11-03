@@ -62,6 +62,8 @@ Release Note、commit、迁移 ID 与回滚方式。
 - **密钥轮换**：`SECRETBOX_KEY` 密钥环（新密钥写入、旧密钥只读解密）与 `LICENSE_HMAC_PEPPER` 版本环
   （旧 pepper 命中后就地重哈希），配套 `scripts/rotate-secrets.mts` 一次性重封存脚本。
 - **分层健康检查与指标**：`/health/live`、`/health/ready`、`/metrics`（Bearer 令牌 + 反代层 deny）。
+- **HTTPS**：`<你的域名>` 由 openresty 提供 443（HTTP/2 + TLSv1.2/1.3 + HSTS），
+  80 端口在 ACME 挑战路径之外全量 301 到 https；`/metrics` 在反代层直接 403。
 
 ### 新增 · 管理后台
 
@@ -82,7 +84,18 @@ Release Note、commit、迁移 ID 与回滚方式。
   （报错 `Unsupported state or unable to authenticate data`）。这是 S3 / WebDAV / SFTP 连接测试
   全部失败的根因。
 - **远端根路径被忽略**：SFTP / WebDAV 配置的 `root_path` 未参与拼接，文件被写到账号根目录。
-- **WebDAV 目录已存在时误判失败**：`MKCOL` 返回 409（父目录已存在）现在视为可用。
+- **远端路径前缀被拼两次**：`remote_prefix` 在 runner 与适配器里各拼一次，SFTP 目标落成
+  `…/upload/backups/offsite/backups/offsite/bkp_*.zmbk`，WebDAV 同样；连接测试的探针文件也受影响。
+  现在由 `backupObjectKey()`（`src/lib/services/backup/runner.ts`）统一产出对象键，适配器只负责
+  `root_path`，并补了 4 条防回归单测。
+- **生产环境 WebDAV 无法使用内网端点**：`allowInsecureHttp` 原先只看 `deploymentEnv`，导致显式
+  `tlsVerify=false` 的内网/本机端点也被拒绝。现在 `tlsVerify=false` 即可放行，但适配器自身的
+  非 loopback 明文检查仍然生效，公网 http 依旧进不来。
+- **WebDAV 目录已存在时误判失败**：`MKCOL` 返回 409（父目录已存在）现在视为可用；另外 Apache
+  （`bytemark/webdav` 就是）对「已存在的集合 + 无尾斜杠」会连 `MKCOL` 一起 301 到 `<path>/`，
+  由于适配器是 `redirect: "manual"`（防止把 Basic Auth 带去别的主机），这类重定向以前被判成
+  `UPLOAD_FAILED`。现在只有「同源 + 路径就是自己加一个尾斜杠」的 301/308 才被视为目录已存在，
+  跨主机或跨路径的跳转仍然失败（`isSameOriginTrailingSlashRedirect`，附 4 条单测）。
 - 容器内 `SIGNING_KEY_DIR=/app/.keys` 被安全闸门误判为“与开发共用”，改为规范化路径比较。
 
 ### 已知限制

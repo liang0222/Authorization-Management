@@ -39,6 +39,28 @@ export function newBackupId(now = new Date()): string {
   return `${BACKUP_ID_PREFIX}${stamp}_${randomBytes(3).toString("hex")}`;
 }
 
+/**
+ * 备份对象在存储上的键：`<remote_prefix>/<backupId>.zmbk`。
+ *
+ * 这是「谁负责前缀」的唯一权威：**remote_prefix 由这里拼**，
+ * 适配器只负责再补上自己的 root_path（SFTP 的 /upload、WebDAV 的目录、S3 的 bucket 隐含）。
+ *
+ * 以前适配器工厂也把 remote_prefix 拼进 prefix 传下去，两边各拼一次，
+ * SFTP 上的真实路径就变成了 `/upload/backups/offsite/backups/offsite/bkp_x.zmbk`。
+ * 抽成一个函数是为了让「拼几次」这件事只有一个答案，重试路径也复用同一份。
+ */
+export function backupObjectKey(remotePrefix: string | null | undefined, backupId: string): string {
+  // 三重归一：去首尾斜杠、折叠中间连续斜杠、丢弃空段。
+  // 用户填 `//backups//offsite//` 这种写法在 S3 上会生成两个空对象名层级，
+  // 在 SFTP 上会变成字面量空目录，两边都不是他想要的。
+  const prefix = (remotePrefix ?? "")
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .join("/");
+  return prefix ? `${prefix}/${backupId}.zmbk` : `${backupId}.zmbk`;
+}
+
 interface TargetPlan {
   destinationId: string;
   name: string;
@@ -137,7 +159,7 @@ async function uploadToTarget(
     return { ok: false, error: message };
   }
 
-  const remotePath = `${plan.row.remote_prefix?.replace(/\/$/, "") ?? ""}/${backupId}.zmbk`.replace(/^\//, "");
+  const remotePath = backupObjectKey(plan.row.remote_prefix, backupId);
 
   try {
     const put = await adapter.put(remotePath, body);
@@ -376,7 +398,7 @@ export async function retryJobTarget(
   }
 
   const row = target.backup_storage_destinations as unknown as AdapterRow;
-  const remotePath = `${row.remote_prefix?.replace(/\/$/, "") ?? ""}/${job.backup_id}.zmbk`.replace(/^\//, "");
+  const remotePath = backupObjectKey(row.remote_prefix, job.backup_id);
   const adapter = await createAdapter(row, organizationId);
 
   await prisma.backup_job_targets.update({

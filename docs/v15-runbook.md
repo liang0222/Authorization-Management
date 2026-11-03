@@ -87,16 +87,24 @@ npx prisma migrate deploy
 
 每条策略可以挂多个目标（local / S3 兼容 / WebDAV / SFTP），目标模式 `all_required`（任一失败整体失败）、`primary_then_fallback`（主失败、备成功 → `degraded` 并告警）、`quorum`。
 
-**当前生产配置**（2026-11-03 建）：
+**当前生产配置**（2026-11-03 建，四目标全 `isRequired`）：
 
-| 目标 | 类型 | 位置 | 说明 |
+| 目标 | 类型 | 落点形态 | 连接测试 |
 | --- | --- | --- | --- |
-| `local-primary` | `local` | `/root/授权saas/.backups/backups/production` | 本机暂存，已通过连接测试（写入/读回/删除三步 ok） |
+| `local-primary` | `local` | `file:///root/授权saas/.backups/backups/production/bkp_*.zmbk` | 写入 / 读回 / 删除 三步 ok |
+| `offsite-s3` | S3 兼容 | `s3://licensing-offsite/backups/offsite/bkp_*.zmbk` | 上传 / 下载比对 / 删除 ok |
+| `offsite-sftp` | SFTP | `sftp://127.0.0.1:19022/upload/backups/offsite/bkp_*.zmbk` | 连接与**主机指纹**校验 / 建目录 / 上传 / 下载比对 / 删除 五步 ok |
+| `offsite-webdav` | WebDAV | `http://127.0.0.1:19080/backups/offsite/bkp_*.zmbk` | Basic Auth / 上传 201 / 下载比对 SHA-256 / 删除 204 四步 ok |
 
 策略 `daily-production`：`0 3 * * *` / `Asia/Shanghai` / `all_required` / `sha256_and_manifest` / 加密开 / 保留 7 日 + 4 周 + 3 月。
-已实跑一次作业验证链路（`status=succeeded`，`ZMBK1` 加密信封，`verify` 与 `restore-test` 四项对账全过）。
 
-> ⚠️ **异地目标尚未接入**：`local` 只解决"每天有加密备份"，不解决"机器整盘坏掉"。把 S3 / WebDAV HTTPS / SFTP 中任一个接进同一策略的第二个目标，才算满足规格 24 的"自动上传独立异地存储"。
+> ⚠️ **这四个目标全部跑在本机 Docker 容器里**（`licensing-offsite-s3`、`licensing-offsite-sftp`、`licensing-offsite-webdav`），属于**同机冗余**，不是跨机房异地。它验证的是"多协议上传、校验、恢复链路都能跑通"，**不解决整机或整盘损毁**。
+>
+> 真正满足规格 24 的"自动上传独立异地存储"，需要把上面任一目标改填**外部**端点（云对象存储的 endpoint/bucket/access_key，或异地主机的 SFTP/WebDAV 地址与凭据）：在后台「备份与灾备 → 目标」里编辑该目标，换掉 `endpointUrl` 与凭据即可，`remotePrefix` 与策略无需改动。生产下 WebDAV 只允许 `https`（除非显式 `tlsVerify=false` 且主机是 loopback）。
+
+实跑证据（2026-11-03，作业 `6f8233d0-32ab-48da-8ea9-274c2431956d` / `bkp_20261103125355_e47bd4`，306579 B）：四目标 `status` 全 `verified`，`checksumSha256` 四份全等 `d74fb0ea…2d7e`；容器内各自 `sha256sum` 与文件头 `ZMBK1` 魔数均已复核；`verify` 返回 `expected == actual`；`restore-test` 四项对账全 ✅（41 表 / 240 授权行 / 异常行 0，RTO 1s）。
+
+更早一轮（作业 `61b274da-…` / `bkp_20261103124458_30ceb3`）还做过一次**独立解密恢复**：从 **S3 远端那份字节**取出（303831 B，sha256 `c61244fd…39c4`），按 `src/lib/services/backup/crypto.ts` 的真实格式解密（`ZMBK1` → `PGDMP`，303798 B）后 `pg_restore` 到临时库：41 张表，organizations=1 / customers=14 / products=4 / licenses=240 / license_keys=232 / activations=444 全部与生产一致（`audit_logs` 差 3 行为备份后的正常增量），`key_hash` 前三条逐字节相同 → 同一 pepper 下授权码仍可验签。这条证明了「远端那份文件本身可用」，而不只是「哈希相等」。
 
 每目标状态：`queued → uploading → uploaded → verifying → verified`，失败为 `failed`，未参与为 `skipped`。只有 `verified` 才算备份成功。
 

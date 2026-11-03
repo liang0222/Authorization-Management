@@ -53,22 +53,23 @@ export function parseCredential(ciphertext: Uint8Array): CredentialPayload {
 }
 
 /**
- * 把 root_path 与 remote_prefix 拼成最终远端前缀。
+ * 只把 `root_path` 归一成适配器需要的前缀。
  *
- * 这一行以前是漏的：`root_path` 在 WebDAV / SFTP 上被静默丢弃，
- * 用户填了 `/upload` 仍然往账号根目录写，于是「连接测试通过、备份全写错位置」。
- * 现在统一在这里拼，本地/S3 不受影响（它们各自用目录/bucket 表达根）。
+ * 职责划分（这里出过一次重复拼接的 bug，写清楚避免再犯）：
+ * - `remote_prefix` 由 **runner** 负责：它调用 `adapter.put()` 前已经把 `remote_prefix` 拼进 remotePath；
+ * - `root_path` 由 **适配器** 负责：它表达「账号/磁盘根目录下的哪个子目录」，属于连接参数。
+ *
+ * 以前这里返回 `root_path + remote_prefix`，而 SFTP/WebDAV 适配器又会把 prefix 前置一次，
+ * 于是远端路径变成 `/upload/backups/offsite/backups/offsite/bkp_xxx.zmbk`。
+ * 本地与 S3 适配器根本不读 `prefix`，所以只有 SFTP/WebDAV 暴露了这个双重拼接。
  */
-function joinRemotePrefix(rootPath: string | null, remotePrefix: string | null): string {
-  const root = (rootPath ?? "").replace(/^\/+|\/+$/g, "");
-  const prefix = (remotePrefix ?? "").replace(/^\/+|\/+$/g, "");
-  const tail = prefix || `backups/${config.deploymentEnv}`;
-  return root ? `${root}/${tail}` : tail;
+function joinRemotePrefix(rootPath: string | null): string {
+  return (rootPath ?? "").replace(/^\/+|\/+$/g, "");
 }
 
 export async function createAdapter(row: AdapterRow, organizationId: string): Promise<StorageAdapter> {
   const remotePrefixOnly = (row.remote_prefix ?? "").replace(/^\/+|\/+$/g, "") || `backups/${config.deploymentEnv}`;
-  const prefix = joinRemotePrefix(row.root_path, row.remote_prefix);
+  const prefix = joinRemotePrefix(row.root_path);
 
   const credential = row.credential_id
     ? await prisma.backup_storage_credentials.findFirst({
@@ -111,7 +112,11 @@ export async function createAdapter(row: AdapterRow, organizationId: string): Pr
         username: cred.username,
         password: cred.password,
         prefix,
-        allowInsecureHttp: config.deploymentEnv !== "production",
+        // 生产默认只允许 https；操作者显式把 tlsVerify 设为 false（＝我确认这是内网/本机端点）
+        // 时才放行 http。放行后 WebDavAdapter 自己还会再检查一次：
+        // 非 https 且主机不是 localhost/127.0.0.1/::1 一律拒绝，所以公网 http 依然进不来。
+        // 两层的分工是：这里决定「生产要不要收紧」，适配器决定「这个地址本身能不能用 http」。
+        allowInsecureHttp: config.deploymentEnv !== "production" || row.tls_verify === false,
       });
     }
 

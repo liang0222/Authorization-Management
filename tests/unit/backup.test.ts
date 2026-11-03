@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { decryptBackup, encryptBackup, sha256Hex } from "@/lib/services/backup/crypto";
-import { decideJobStatus } from "@/lib/services/backup/runner";
+import { backupObjectKey, decideJobStatus } from "@/lib/services/backup/runner";
+import { isSameOriginTrailingSlashRedirect } from "@/lib/services/backup/adapters/webdav";
 import { isCronLike, retentionSchema } from "@/lib/services/backup/schemas";
 
 /**
@@ -103,5 +104,63 @@ describe("调度与保留策略校验", () => {
     expect(retentionSchema.safeParse({ daily: 0, weekly: 4, monthly: 6 }).success).toBe(false);
     expect(retentionSchema.safeParse({ daily: 7, weekly: -1, monthly: 6 }).success).toBe(false);
     expect(retentionSchema.safeParse({ daily: 7, weekly: 4, monthly: 999 }).success).toBe(false);
+  });
+});
+
+describe("远端对象键 backupObjectKey（防前缀双拼回归）", () => {
+  it("有 remote_prefix 时拼一次", () => {
+    expect(backupObjectKey("backups/offsite", "bkp_20261103123208_765418")).toBe(
+      "backups/offsite/bkp_20261103123208_765418.zmbk",
+    );
+  });
+
+  it("前后斜杠被归一，不会产生双斜杠", () => {
+    expect(backupObjectKey("/backups/offsite/", "bkp_x")).toBe("backups/offsite/bkp_x.zmbk");
+    expect(backupObjectKey("//backups//offsite//", "bkp_x")).toBe("backups/offsite/bkp_x.zmbk");
+  });
+
+  it("没有 remote_prefix 时只留文件名，不会以斜杠开头", () => {
+    expect(backupObjectKey(null, "bkp_x")).toBe("bkp_x.zmbk");
+    expect(backupObjectKey(undefined, "bkp_x")).toBe("bkp_x.zmbk");
+    expect(backupObjectKey("", "bkp_x")).toBe("bkp_x.zmbk");
+    expect(backupObjectKey("/", "bkp_x")).toBe("bkp_x.zmbk");
+  });
+
+  it("前缀里出现重复时不做二次拼（这是当年的 bug 形态）", () => {
+    // 回归断言：结果里 backups/offsite 只出现一次
+    const key = backupObjectKey("backups/offsite", "bkp_x");
+    expect(key.match(/backups\/offsite/g)).toHaveLength(1);
+  });
+});
+
+describe("WebDAV MKCOL 尾斜杠重定向识别", () => {
+  /**
+   * Apache 对「已存在的集合 + 无尾斜杠」会回 301 到 `<path>/`。因为 request() 是
+   * redirect:"manual"（防止把 Basic Auth 带去别的主机），这类重定向必须自己判定。
+   * 下面把「该认」和「绝不能认」两类都写死。
+   */
+  const requested = "http://127.0.0.1:19080/backups/offsite";
+
+  it("同源、路径相同、只多了尾斜杠 → 视为目录已存在", () => {
+    expect(isSameOriginTrailingSlashRedirect("http://127.0.0.1:19080/backups/offsite/", requested)).toBe(true);
+    // 相对 Location 同样成立
+    expect(isSameOriginTrailingSlashRedirect("/backups/offsite/", requested)).toBe(true);
+  });
+
+  it("跨主机一律拒绝（哪怕路径一模一样）", () => {
+    expect(isSameOriginTrailingSlashRedirect("http://evil.example.com/backups/offsite/", requested)).toBe(false);
+    // 同主机不同端口也算跨源
+    expect(isSameOriginTrailingSlashRedirect("http://127.0.0.1:19081/backups/offsite/", requested)).toBe(false);
+  });
+
+  it("同源但路径不同 → 拒绝（不是 DirectorySlash 那种情况）", () => {
+    expect(isSameOriginTrailingSlashRedirect("http://127.0.0.1:19080/other/", requested)).toBe(false);
+    expect(isSameOriginTrailingSlashRedirect("http://127.0.0.1:19080/backups/offsite/nested/", requested)).toBe(false);
+  });
+
+  it("缺失或非法的 Location → 拒绝", () => {
+    expect(isSameOriginTrailingSlashRedirect(null, requested)).toBe(false);
+    expect(isSameOriginTrailingSlashRedirect("", requested)).toBe(false);
+    expect(isSameOriginTrailingSlashRedirect("http://[::bad", requested)).toBe(false);
   });
 });
