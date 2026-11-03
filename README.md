@@ -107,29 +107,43 @@ LICENSE_KEY=<授权码> LICENSE_PRODUCT_ID=<产品 UUID> node sdk-examples/verif
 │  ├─ /app/features                  功能权限（跨产品）
 │  ├─ /app/licenses                  授权管理
 │  ├─ /app/licenses/[id]             授权详情（6 个 Tabs）
-│  └─ /app/devices                   激活设备
+│  ├─ /app/devices                   激活设备
+│  └─ /app/devices/[id]              设备详情（档案/绑定/事件）
 ├─ 开发者中心
 │  ├─ /app/developer/api             API 接入（真实连通性自检）
 │  ├─ /app/developer/credentials     API 凭证
+│  ├─ /app/developer/usage           调用量、成功率、错误码分布
 │  ├─ /app/developer/webhooks        Webhook 端点
-│  └─ /app/developer/webhooks/[id]   投递记录与重投
+│  └─ /app/developer/webhooks/[id]   投递记录、重投与测试投递
 ├─ 安全审计
 │  ├─ /app/security/signing-keys     签名密钥
 │  ├─ /app/security/verification-logs 验证日志
 │  └─ /app/security/audit-logs       操作审计
 └─ 系统管理
-   ├─ /app/settings/members          管理员与角色
+   ├─ /app/settings/members          管理员
+   ├─ /app/settings/roles            角色与权限
    ├─ /app/settings/organization     组织设置（时区）
    ├─ /app/settings/system           系统设置
    ├─ /app/settings/backups          备份与灾备（目标/策略/作业/演练）
    └─ /app/settings/profile          个人设置（资料/改密/MFA）
 ```
 
-共 43 个页面路由（后台 23 + 开发者文档 16 + 认证 3 + 根重定向 1）、
-71 个 API 路由（管理 50 / 认证 5 / 公开协议 11 / 开发者文档 5），
-其中备份与灾备占 12 个管理路由、公开协议里含 3 个 v1.5 新增端点。
+共 46 个页面路由（后台 26 + 开发者文档 16 + 认证 3 + 根重定向 1）、
+76 个 API 路由（管理 52 / 认证 5 / 公开协议 10 / 开发者文档 5 / 运维与健康检查 3 / Prometheus 指标 1），
+其中备份与灾备占 12 个管理路由、公开协议里含 4 个 v1.5 新增端点。
 
-### 3.1 授权详情页的 6 个 Tab
+### 3.1 部署形态
+
+| 实例 | 监听 | `DEPLOYMENT_ENV` | 数据库 | 签名密钥 | 用途 |
+| --- | --- | --- | --- | --- | --- |
+| `licensing-saas` | `127.0.0.1:3100`（反代 `<你的域名>`） | `production` | `licensing` | `.keys-prod` | 真实客户 |
+| `licensing-saas-sandbox` | `127.0.0.1:3101` | `sandbox` | `licensing_sandbox` | `.keys-sandbox` | 接入联调 |
+
+生产环境变量在 `/etc/licensing-saas/production.env`（0600，systemd `EnvironmentFile` 注入，
+优先于项目 `.env`）；模板见 [`.env.example`](.env.example)。两个实例共用同一份构建产物，
+隔离靠数据库、密钥目录、限流前缀与凭证的 `environment` 字段，不靠部署到不同机器。
+
+### 3.2 授权详情页的 6 个 Tab
 
 概览（含有效状态推导、配额进度、时间线）· 激活设备（解绑/禁用）· 功能权限（合并套餐默认值
 与授权快照）· 续费记录 · 验证日志 · 操作历史。
@@ -205,16 +219,36 @@ docs/                         交付文档（见下）
 
 ## 6. 文档
 
+### 6.1 开发与接口
+
 | 文件 | 内容 |
 | --- | --- |
+| [`docs/api.md`](docs/api.md) | 统一响应与错误码表、全部 route handler、公开 API 流程、列表分页（含游标）、页面↔接口清单 |
 | [`docs/design-system.md`](docs/design-system.md) | 设计 Token、组件规范、按钮七状态、响应式断点、禁用清单 |
-| [`docs/vibehub-terminology.md`](docs/vibehub-terminology.md) | VibeHub 安装记录、20+ 术语对照（带真实内链）、术语如何改变实现 |
-| [`docs/api.md`](docs/api.md) | 统一响应、错误码表、66 个 route handler、公开 API 流程、页面↔接口清单 |
 | [`docs/ai-integration-prompt.md`](docs/ai-integration-prompt.md) | 给 AI 编程工具的接入提示词（禁止事项、值分级、自检清单） |
-| [`docs/v15-audit.md`](docs/v15-audit.md) | v1.5 规格包逐条审计与 P0/P1/P2 落地状态 |
+| [`sdk-examples/README.md`](sdk-examples/README.md) | 六语言示例、错误映射表、各平台踩坑（全部 Preview，非已发布 SDK） |
+| [`public/openapi/openapi-v1.yaml`](public/openapi/openapi-v1.yaml) | 对外契约（OpenAPI 3.1），与 `src/app/api/v1` 逐条核对 |
+
+### 6.2 运行与运维
+
+| 文件 | 内容 |
+| --- | --- |
+| [`docs/v15-runbook.md`](docs/v15-runbook.md) | 部署形态、日常命令、发布、备份恢复、私钥离线备份、沙箱重建、回滚、常见故障 |
+| [`docs/operations.md`](docs/operations.md) | 发布管理、容量与成本、事件响应（含密钥泄漏处置与客户通告模板）、状态页、日常任务 |
+| [`docs/observability.md`](docs/observability.md) | `/health/live`·`/health/ready`·`/metrics`、指标清单、日志前缀、告警分级、排障路径 |
+| [`SECURITY.md`](SECURITY.md) | 漏洞报告流程、支持范围、设计上的安全边界、部署侧必做项 |
+| [`docs/privacy.md`](docs/privacy.md) | 采集范围、保留期限、脱敏、导出、删除与匿名化、跨境 |
+
+### 6.3 过程记录
+
+| 文件 | 内容 |
+| --- | --- |
+| [`CHANGELOG.md`](CHANGELOG.md) | v1.5.0 的完整变更记录与已知限制 |
+| [`docs/v15-audit.md`](docs/v15-audit.md) | v1.5 规格包逐条审计与 P0/P1/P2 落地状态（审计阶段快照） |
+| [`docs/v15-delivery.md`](docs/v15-delivery.md) | P0/P1 完成表（含实现位置与证据）、未完成项、本轮修的 5 个真缺陷、验证命令 |
 | [`docs/test-report.md`](docs/test-report.md) | 测试结果、15.10 十二条验收、15.11 交付清单、未覆盖项 |
 | [`docs/handoff.md`](docs/handoff.md) | 已完成/待办、快速恢复、踩坑清单 |
-| [`sdk-examples/README.md`](sdk-examples/README.md) | 六语言示例、错误映射表、各平台踩坑（Preview 状态，非已发布 SDK） |
+| [`docs/vibehub-terminology.md`](docs/vibehub-terminology.md) | VibeHub 安装记录、20+ 术语对照（带真实内链）、术语如何改变实现 |
 | [`docs/shots/`](docs/shots) | 29 张真实页面截图（生产构建 + 种子数据，桌面与移动端） |
 
 ---
@@ -222,8 +256,14 @@ docs/                         交付文档（见下）
 ## 7. 安全约定
 
 - 授权码只存 HMAC-SHA256 摘要，列表展示打码为 `••••-••••-••••-3456`，明文只在签发时出现一次；
+  换 pepper 走版本环（新值签发、旧值只读校验并就地重哈希），不会让存量授权码失效；
 - 凭证 secret 只存 SHA-256，公开客户端不签发 secret；
-- 签名私钥落盘 `.keys/<kid>.pem`，权限 `0600`，不进 Git；
-- 会话 Cookie `HttpOnly` + `SameSite=Lax`，`Secure` 按实际协议决定（HTTPS 部署自动开启）；
+- MFA 密钥、Webhook 签名密钥、备份存储凭证用 `SECRETBOX_KEY` 做 AES-256-GCM 信封加密，
+  与 `SESSION_SECRET` 分离，支持密钥环轮换（`scripts/rotate-secrets.mts`）；
+- 签名私钥落盘 `.keys-prod/<kid>.pem`（生产）/ `.keys-sandbox/`（沙箱），权限 `0600`，不进 Git，
+  接口只暴露公钥指纹，私钥无下载路径；
+- 会话 Cookie `HttpOnly` + `SameSite=Lax`，`Secure` 按 `APP_BASE_URL` 的协议自动开启；
 - 所有写操作要求 CSRF 双提交令牌；
-- 每个管理写操作都写 `audit_logs`（含前后值 diff，敏感字段脱敏）。
+- 每个管理写操作都写 `audit_logs`（含前后值 diff，敏感字段脱敏）；
+- Webhook 出站强制 SSRF 校验（私网/链路本地/云元数据/CGNAT/IPv6 ULA 全拒，DNS 解析后逐 IP 复核）；
+- 生产启动闸门：使用开发默认密钥、共用开发签名目录、`DEV_MAIL_SINK=true` 时直接拒绝启动。

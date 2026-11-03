@@ -38,7 +38,10 @@ journalctl -u licensing-saas-sandbox -n 100 --no-pager
 # 重启（改代码后必须重新 build，见 §3）
 systemctl restart licensing-saas licensing-saas-sandbox
 
-# 健康检查（注意：本项目没有 /api/health）
+# 分层健康检查（本项目没有 /api/health）
+curl -s http://127.0.0.1:3100/health/live     # 只测进程
+curl -s http://127.0.0.1:3100/health/ready    # 测库与签名密钥，失败 503
+curl -s -H "Authorization: Bearer $METRICS_TOKEN" http://127.0.0.1:3100/metrics | head
 curl -s http://127.0.0.1:3100/api/v1/status | head -c 200
 curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3100/login
 ```
@@ -189,12 +192,38 @@ systemctl start licensing-saas licensing-saas-sandbox
 
 ⚠️ 恢复旧 dump 会**删掉新版本加的表和列**（例如 `product_credentials.environment`），恢复后必须把代码也回退到匹配版本，否则应用起不来。
 
-### 7.3 待办（上生产前必须做）
+### 7.3 已完成的上生产项（2026-11-03）
 
-1. 生产实例 `DEPLOYMENT_ENV` 仍是 `development`。改成 `production` 之前，必须先把 `SESSION_SECRET`、`LICENSE_HMAC_PEPPER`、`BACKUP_ENCRYPTION_KEY` 换成强随机值、`DEV_MAIL_SINK=false`，否则启动即失败（这是设计如此，防止生产用开发密钥）。
-2. `git init` + 首次提交 + tag `v1.5.0`。
-3. 把 openresty 反代到 3100（目前只在回环上，外网不可达）。
-4. 每日异地备份目标落到真实的对象存储；当前只验证过本机临时容器。
+1. ✅ 生产实例 `DEPLOYMENT_ENV=production`，`SESSION_SECRET` / `SECRETBOX_KEY` /
+   `LICENSE_HMAC_PEPPER` / `BACKUP_ENCRYPTION_KEY` 全部换为随机值，`DEV_MAIL_SINK=false`，
+   `SIGNING_KEY_DIR=.keys-prod`；启动日志 `[boot] env=production … 配置检查通过`。
+   旧 pepper 留作 `LICENSE_HMAC_PEPPER_LEGACY`（版本环），旧封存密钥在重封存后已移除。
+2. ✅ `git init` + 首次提交 + tag `v1.5.0`。
+3. ✅ openresty 反代到 3100（`<你的域名>`，HTTP）。**HTTPS 待办**：需在 1Panel
+   为 `<你的域名>` 申请证书后，在 `/opt/1panel/www/conf.d/<你的域名>.conf`
+   增加 443 server 并复用同一 `location` 段。
+4. ⚠️ 每日异地备份目标仍需落到真实对象存储：本机只验证过临时容器（S3/WebDAV/SFTP 三协议均
+   `verified` + 隔离恢复演练通过），容器已删除。生产需在 `/app/settings/backups` 重新配置目标。
+
+### 7.4 密钥轮换手册
+
+```bash
+# 1) 改 SECRETBOX_KEY（新值写入 SECRETBOX_KEY，旧值临时写到 SECRETBOX_KEYS_LEGACY）
+sudo vim /etc/licensing-saas/production.env
+sudo npx tsx scripts/rotate-secrets.mts            # dry-run，先看扫描/待重封存数量
+sudo npx tsx scripts/rotate-secrets.mts --apply    # 真正重封存
+# 2) 确认输出“已是最新=N 失败=0”后，删除 SECRETBOX_KEYS_LEGACY
+sudo systemctl restart licensing-saas
+```
+
+```bash
+# 2) 轮换授权码 pepper：新值进 LICENSE_HMAC_PEPPER，旧值进 LICENSE_HMAC_PEPPER_LEGACY
+#    旧码在客户端下次校验时自动重哈希到新 pepper，无需停机、无需重发授权码。
+#    全部迁移完成后可清空 LEGACY（不影响已重哈希的行）。
+```
+
+轮换后自检：`/health/ready` 200、用一条旧授权码 `POST /api/v1/licenses/validate` 应返回
+`valid:true`，且 `select hash_key_version, count(*) from license_keys group by 1` 逐步收敛到新版本。
 
 ---
 
