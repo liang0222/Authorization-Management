@@ -170,12 +170,12 @@ rmdir /root/licensing-saas
 
 | 包 | 体积（约） | 文件数 | 说明 |
 | --- | --- | --- | --- |
-| `licensing-saas-v1.5.0.tar.gz` | 7.3 MB | 384 | 保留 `scripts/*.sh` 的 `0755` 可执行位 |
-| `licensing-saas-v1.5.0.zip` | 7.6 MB | 384 | mode 存在元数据里，python 解压会丢，需 `chmod +x scripts/*.sh` |
+| `licensing-saas-v1.5.0.tar.gz` | 7.4 MB | 387 | 保留 `scripts/*.sh` 的 `0755` 可执行位 |
+| `licensing-saas-v1.5.0.zip` | 7.7 MB | 387 | mode 存在元数据里，python 解压会丢，需 `chmod +x scripts/*.sh` |
 
-> **体积与 sha256 随内容变化，不要抄这里的数字。** 每次打完包以命令输出的 `sha256=` 为准（上面的打包脚本会打印）。文档只保证两条结构性质：**文件数 384**、**两包逐文件字节完全一致**。
+> **体积、文件数与 sha256 都随内容变化，不要抄这里的数字。** 每次打完包以命令输出的 `sha256=` 为准（上面的打包脚本会打印）。文档只保证一条结构性质：**两包逐文件字节完全一致**。
 
-文件数为什么是 384 而不是 `git ls-files` 的 394：其中 10 条是 `.windsurf/skills/*` 的符号链接（指向 `.agents/skills/`，属本机开发环境配置，git 里存的是链接路径而不是内容）。打包按「只收普通文件、跳过符号链接」处理。
+文件数 = `git ls-files` 减去所有符号链接。当前是 397 − 10 = **387**；那 10 条是 `.windsurf/skills/*`（指向 `.agents/skills/`，属本机开发环境配置，git 里存的是链接路径而不是内容）。打包按「只收普通文件、跳过符号链接」处理，所以数字会随仓库新增文件变化，**以脚本实际统计为准**。
 
 **打包后的自检（打之前跑一遍，别把密钥打出去）**：
 
@@ -196,7 +196,7 @@ print("含密钥/备份目录:", [n for n in t if n.startswith(('.keys','.backup
 print("含 node_modules/.next:", any(n.startswith(('node_modules','.next')) for n in t))
 print("可执行位:", [(m.name, oct(m.mode)) for m in tarfile.open(tg).getmembers() if m.isfile() and m.mode & 0o111])
 PY
-# 期望：zip: 384 tar: 384 / 只在 zip: [] | 只在 tar: [] / 内容不一致: []
+# 期望：zip 与 tar 文件数相同 / 只在 zip: [] / 只在 tar: [] / 内容不一致: []
 #      含真 .env: False / 含密钥/备份目录: [] / 含 node_modules/.next: False
 #      可执行位只有 scripts/offsite-key-backup.sh 与 scripts/sandbox-bootstrap.sh 两个 0o755
 ```
@@ -212,7 +212,13 @@ mkdir -p .keys-prod && chmod 700 .keys-prod      # 见下方说明
 # 然后按 §5 写 /etc/licensing-saas/production.env
 ```
 
-> ⚠️ **`.keys-prod` 目录必须自己建**。包里没有（正确），但 `/health/ready` 会 `access(SIGNING_KEY_DIR, R_OK)`，目录不存在就返回 503 `signing_key_dir_unreadable`。本机实测过这个场景：从包解出来起服务，`/health/ready` 就是 503，`mkdir -p .keys-prod` 之后立刻变 200。签名密钥由应用在首次需要时生成，目录你得先备好。
+> ⚠️ **`.keys-prod` 目录必须自己建**（`mkdir -p .keys-prod && chmod 700`）。包里没有私钥是**对的**——私钥永远不进发布包。`scripts/deploy-bootstrap.sh` 会自动建好它。
+>
+> **探针变严了**：`/health/ready` 现在不只看目录，还会顺着当前 `active` 签名密钥的 `private_key_ref` 找到那个 `.pem` 文件本身，`access(path, R_OK)` 失败就返回 503 **`signing_key_unreadable`**。
+>
+> 为什么加这一层：从一份 dump 恢复到新机器时，`signing_keys` 表里有 kid 与文件名、`.keys-prod` 却是空的。旧探针只数 active 行 + 看目录，那时会**自称 ready**，直到真正签发授权才 503「签名私钥文件不可读」——等于探针没探。本机实测过这个差异（同一份数据：旧探针 200，新探针 503）。
+>
+> 补齐方式见 §4.4「恢复后必须补私钥」。
 
 > ⚠️ **`.windsurf/skills/*` 那 10 个符号链接不会进包**（`git ls-files` 里有，但 `os.path.islink()` 判断会跳过）。它们只是 IDE 的 skill 软链，指向 `.agents/skills/`，与本项目运行无关。少这 10 条不影响任何功能。
 
@@ -366,6 +372,111 @@ docker exec licensing-pg psql -U licensing -d licensing -At -c \
 # 期望 7
 ```
 
+### 4.4 恢复 dump 之后必须做的两件事
+
+从一份 dump 恢复到新机器，**恢复完不等于能跑**。本机实测踩到两个必踩的坑，两个都会以「服务起来了但业务全挂」的形式出现，且都不会在启动时报错。
+
+#### ① 必须补跑迁移：`prisma migrate deploy`
+
+**现象**：服务能启动、`/health/ready` 可能还返回 200，但任何查询 `product_credentials` 的接口都 500：
+
+```
+Invalid `prisma.product_credentials.findMany()` invocation
+  originalCode: '42703'
+  originalMessage: 'column product_credentials.environment does not exist'
+  kind: 'ColumnNotFound'
+```
+
+**原因**：dump 里的 `_prisma_migrations` 只记录了**做 dump 那一刻**已有的迁移。本机这份 dump 有 6 条，而代码里有 8 条：
+
+```
+$ docker exec licensing-pg psql -U licensing -d licensing -At -c \
+    "select migration_name from _prisma_migrations order by finished_at"
+20261102000000_init
+20261102010000_mfa_secret
+20261102120000_v15_public_api_and_backup
+20261102130000_v15_server_credential_pubkey
+20261102140000_webhook_secret_enc
+20261102150000_backup_permissions
+    ← 少了 20261102160000_v15_credential_environment（加 environment 列）
+    ← 少了 20261104040000_backup_job_purged_at（加 purged_at 列）
+```
+
+**做法**：`pg_restore` 之后无条件跑一次：
+
+```bash
+cd /root/授权saas
+export LICENSE_DB_URL="postgresql://licensing:密码@127.0.0.1:55432/licensing?schema=public"
+npx prisma migrate deploy
+# 期望：The following migration(s) have been applied: ... All migrations have been successfully applied.
+```
+
+这一条 `deploy-bootstrap.sh` 的第 6 步已经包含（除非你显式 `--skip-db`）。
+
+#### ② 必须补私钥：`scripts/repair-signing-keys.mts`
+
+**现象**：服务 `active`、`/health/ready` 返回 200，但真正签发授权或离线许可时 503：
+
+```
+签名失败 → 503 LICENSE_SERVICE_UNAVAILABLE 签名私钥文件不可读，请检查密钥目录挂载
+```
+
+**原因**：私钥是**刻意**不进 dump、也不进发布包的（设计如此，见 §5.2）。所以恢复到新机器后状态是：
+
+| 位置 | 内容 |
+| --- | --- |
+| `signing_keys` 表 | 有 kid、有 `private_key_ref` 文件名、有公钥 |
+| `.keys-prod/` | **空的**（文件根本不存在） |
+| `product_credentials` 表 | confidential_server 行引用了 `credentials/{client_id}.pem`，文件也不存在 |
+
+**做法**：先体检，再补。
+
+```bash
+cd /root/授权saas
+export SECRETS_ENV_FILE=/etc/licensing-saas/production.env
+
+# 体检（DRY-RUN，不改任何东西）
+npx tsx scripts/repair-signing-keys.mts
+
+# 真补（会生成新 Ed25519 密钥对，并把新公钥写回库）
+npx tsx scripts/repair-signing-keys.mts --apply
+
+# 只补一类
+npx tsx scripts/repair-signing-keys.mts --apply --only=signing
+npx tsx scripts/repair-signing-keys.mts --apply --only=credentials
+```
+
+脚本行为：
+
+- **幂等**：文件已存在就只打印 `OK <kid> [status] 公钥指纹 <fp>`，不覆盖。
+- **新行继承原行的 `status` 与 `not_before`/`not_after`**。这点很关键：一条 `staged` 密钥的含义是「已生成、还没到生效时间、不许拿来签东西」，补私钥时把它建成 `active` 等于悄悄提前启用了轮换预案。
+- 旧行降级：`active → retiring`，其余 `→ revoked`，历史行保留便于审计。
+- `retiring` 行**跳过**补私钥（它只用于验旧签名，缺了不影响新签发）。
+- confidential_server 凭证会**连公钥一起换**，脚本会打印警告：**外部调用方必须重新配置公钥**。生产上更稳的做法是走管理后台「新建凭证」让调用方自己提交公钥。
+- 末尾守卫：`active` 行 > 1 时告警（正常只应有 1 行，`loadActiveSigningKey` 取 `created_at` 最新那条）。
+
+**验证修好了**（不要只看 ready，要真签一次）：
+
+```bash
+cd /root/授权saas
+npx tsx -e '
+const { prisma } = await import("./src/lib/db.js");
+const mod = await import("./src/lib/domain/signing-key.js");
+const { createPublicKey, verify } = await import("node:crypto");
+const org = await prisma.organizations.findFirstOrThrow({ select: { id: true } });
+const active = await mod.loadActiveSigningKey(org.id);
+const priv = mod.loadPrivateKey(`${active.kid}.pem`);
+const payload = Buffer.from("hello");
+const sig = mod.signBytes(priv, payload);
+const pub = createPublicKey({ key: Buffer.from(active.publicKeyDer), format: "der", type: "spki" });
+console.log(`kid=${active.kid} 签名=${sig.length}B 用库中公钥验签=${verify(null, payload, pub, sig)}`);
+await prisma.$disconnect();
+'
+# 期望：kid=sk_... 签名=64B 用库中公钥验签=true
+```
+
+**为什么这条验证不能省**：`/health/ready` 只证明「当前私钥文件可读」，不证明「这把私钥和库里那行公钥是一对」。补钥脚本两者一起写所以不会错配，但如果你手工替换过 `.pem`，只验 ready 会漏掉密钥对不匹配这种致命状态。
+
 ---
 
 ## 5. 环境变量
@@ -476,6 +587,44 @@ PUBLIC_SANDBOX_API_BASE_URL=https://<你的沙箱域名>
 
 ## 6. 依赖与构建
 
+### 6.0 一键脚本（推荐先看这个）
+
+`scripts/deploy-bootstrap.sh` 把本文第 2–7 章的手工步骤串成一个幂等脚本，**做完还会真验证**（`/health/ready` + `/login` + `/` + journal 错误计数）。想省事就跑它，想理解细节再往下读各章。
+
+```bash
+cd /root/授权saas
+chmod +x scripts/deploy-bootstrap.sh
+
+# 完整流程（假定数据库已就绪）
+./scripts/deploy-bootstrap.sh
+
+# 顺带起 PostgreSQL 容器 + 恢复 dump
+./scripts/deploy-bootstrap.sh --with-docker-pg --restore-dump=/tmp/licensing.dump
+
+# 分步跑
+./scripts/deploy-bootstrap.sh --only=build      # 装依赖 + generate + 构建，不碰 systemd
+./scripts/deploy-bootstrap.sh --skip-db         # 库已就绪，跳过 migrate 与私钥体检
+
+# 部署第二个实例（沙箱）
+./scripts/deploy-bootstrap.sh \
+  --port=3101 --service-name=licensing-saas-sandbox \
+  --env-file=/etc/licensing-saas/sandbox.env
+```
+
+它覆盖的步骤：前置检查 → 生成环境文件（4 把密钥现场随机，已存在则保留）→ 可选起 PG 容器 → 可选恢复 dump → `npm ci` + `prisma generate` → **`prisma migrate deploy`** → **私钥体检与补齐** → `npm run build` → 写 systemd 单元并启用 → 真验证。
+
+**一个守卫（被真实事故逼出来的）**：脚本第 9 步写 systemd 单元之前会检查目标文件——**已存在且 `WorkingDirectory` 指向另一个目录时拒绝覆盖**，退出非 0。
+
+为什么需要：演练时我在 `/tmp` 下跑脚本，忘了它默认服务名就是 `licensing-saas`，于是把生产单元覆盖成了 `WorkingDirectory=/tmp/deploytest/licensing-saas` + `-p 3197`。systemd 不报错，`systemctl restart` 也不报错，只是安静地让「生产服务」跑起另一个目录里的代码。要接管同名单元必须显式 `--force`；部署第二实例应当用 `--service-name` 换名，本就不该撞上。
+
+三个刻意的设计：
+
+- **不覆盖已存在的环境文件**。覆盖会让所有会话失效、所有用旧 `SECRETBOX_KEY` 封存的密文永久打不开。
+- **环境文件里缺 `LICENSE_DB_URL` 时会补一行并大声告知**，而不是让 `config.ts` 静默回退到开发默认地址（那个坑见 §5.3）。
+- **任何一项验证不过就 `exit 1`**，不打印「应该没问题」。
+
+### 6.1 手工步骤
+
 ```bash
 cd /root/授权saas
 
@@ -490,7 +639,7 @@ npx prisma generate
 npm run build
 ```
 
-### 6.1 各步期望输出
+### 6.2 各步期望输出
 
 **`npm ci`**：本机 `npm ci` 输出 `added 784 packages`（落盘后 `node_modules` 里含嵌套共 1283 个 `package.json`、约 976 MB），耗时 1–3 分钟。Prisma 7 的 engines 要现场下载，网络慢会卡在 `prisma` 那一步——超时就重试一次，不要连续重试超过两次。
 
@@ -498,7 +647,7 @@ npm run build
 
 **`npm run build`**：结尾是 `✓ Compiled successfully`。
 
-### 6.2 构建时最容易踩的坑
+### 6.3 构建时最容易踩的坑
 
 **`next.config.ts` 开了 `cacheComponents: true`**。这意味着：
 
@@ -509,7 +658,7 @@ export const dynamic = "force-dynamic";
 
 新写路由时不要加这行。需要动态行为就靠 `cache: "no-store"` 或请求本身带动态数据。
 
-### 6.3 全量校验（可选但建议）
+### 6.4 全量校验（可选但建议）
 
 ```bash
 npm run verify
@@ -1220,6 +1369,8 @@ bash /root/授权saas/scripts/offsite-key-backup.sh
 
 全部跑一遍，**每条都要看到期望输出**。任何一条不符就别声称部署成功。
 
+`scripts/deploy-bootstrap.sh` 的第 10 步会自动覆盖 10.1（服务活着）、10.3（HTTP 状态码）、10.6（日志零错误）三条；**其余各条必须手工跑**——尤其是 10.6b（签发链路真的能签），探针通过不代表能签发。
+
 ### 10.1 服务活着
 
 ```bash
@@ -1261,7 +1412,7 @@ curl -s http://127.0.0.1:3100/health/ready
 # {"status":"ready","env":"production","checks":{"database":null,"signing_keys":null}}
 ```
 
-`checks` 里两项都是 `null` 才叫就绪。任何一项非 null 就是 503，值会告诉你是 `database_unavailable` 还是 `no_active_signing_key` / `signing_key_dir_unreadable`。
+`checks` 里两项都是 `null` 才叫就绪。任何一项非 null 就是 503，值会告诉你是 `database_unavailable`、`no_active_signing_key` 还是 `signing_key_unreadable`（后者表示当前那把签名私钥的文件不在盘上，跑 `scripts/repair-signing-keys.mts` 修）。
 
 ### 10.4 登录能拿到 cookie
 
@@ -1297,6 +1448,41 @@ journalctl -u licensing-saas --since "-5min" | grep -icE "error|exception"
 ```
 
 > 已知会出现但**不是故障**的两条：`The Server Reference ID did not match the expected format. Received "y"` —— 外部扫描器往 `/login` 发 `Next-Action: y` 头探测所致，返回 400，无害。可复现：`curl -X POST http://127.0.0.1:3100/login -H 'Next-Action: y'`。
+
+### 10.6b 签发链路真的能签（最容易漏的一条）
+
+前面 10.1–10.6 全过，仍可能「服务健康但业务全挂」——私钥缺失或密钥对错配都属于这种。必须真签一次：
+
+```bash
+cd /root/授权saas
+export SECRETS_ENV_FILE=/etc/licensing-saas/production.env
+npx tsx -e '
+const { prisma } = await import("./src/lib/db.js");
+const mod = await import("./src/lib/domain/signing-key.js");
+const { createPublicKey, verify } = await import("node:crypto");
+const org = await prisma.organizations.findFirstOrThrow({ select: { id: true } });
+const active = await mod.loadActiveSigningKey(org.id);
+const priv = mod.loadPrivateKey(`${active.kid}.pem`);
+const payload = Buffer.from("acceptance-check");
+const sig = mod.signBytes(priv, payload);
+const pub = createPublicKey({ key: Buffer.from(active.publicKeyDer), format: "der", type: "spki" });
+console.log(`kid=${active.kid} 签名=${sig.length}B 用库中公钥验签=${verify(null, payload, pub, sig)}`);
+await prisma.$disconnect();
+'
+# 期望：kid=sk_... 签名=64B 用库中公钥验签=true
+```
+
+三项都要看到：签名长度 **64**（Ed25519 固定长度）、验签 **true**、`kid` 与 `/api/v1/admin/signing-keys?status=active` 返回的一致。缺私钥时这里会 503；密钥对错配时验签为 false——这两种状态 `/health/ready` 都可能返回 200，所以**不能只看探针**。
+
+另外再走一次真实业务路径（管理后台的「签名密钥」页新建一把，看是否返回 201 与一次性公钥信息）：
+
+```bash
+CSRF=$(awk '$6=="lic_csrf"{print $7}' /tmp/c.txt)
+curl -s -b /tmp/c.txt -X POST http://127.0.0.1:3100/api/v1/admin/signing-keys \
+  -H 'content-type: application/json' -H "x-csrf-token: $CSRF" \
+  -H 'origin: http://127.0.0.1:3100' -d '{"productId":null}' -w "\nHTTP=%{http_code}\n" | head -c 400
+# 期望 HTTP=201，data 里有 kid / publicKeyFingerprint / privateKeyRef / secretNotice
+```
 
 ### 10.7 HTTPS
 
@@ -1584,6 +1770,10 @@ cd /root/授权saas && ./scripts/offsite-key-backup.sh
 | `docker exec ... < 文件` 没数据 | 同上 | `docker cp` |
 | `retention-cleanup` 干跑却删了数据 | 漏了 `--apply` 判断反了 | 默认就是 dry-run，加 `--apply` 才删 |
 | 备份定时器/保留清理的时间对不上北京时间 | 系统时区是 UTC | 见 §1.4 与 §11.3 |
+| 恢复 dump 后接口 500，`42703 column xxx does not exist` | dump 里的迁移记录比代码少，恢复完没跑 migrate | `npx prisma migrate deploy`，见 §4.4① |
+| `/health/ready` 200 但签发 503「签名私钥文件不可读」 | 私钥不随包不随 dump 走，新机器上是空的 | `npx tsx scripts/repair-signing-keys.mts --apply`，见 §4.4② |
+| 补钥后库里出现多条 `active` 签名密钥 | 脚本早期版本没继承原行 `status` | 已修（继承 `status`/`not_before`），确认代码是 v1.5.0 之后；多出来的手工转 `retiring` |
+| 重启后服务跑的是别的目录/端口 | 同名 systemd 单元被另一份部署覆盖了 | `grep WorkingDirectory /etc/systemd/system/*.service`；`deploy-bootstrap.sh` 现在会拒绝这种覆盖 |
 
 ---
 
@@ -1594,12 +1784,20 @@ cd /root/授权saas && ./scripts/offsite-key-backup.sh
 # 2 放代码      → 排除 node_modules/.next/.keys-prod
 # 3 起数据库    → postgres:16-alpine 绑 127.0.0.1:55432
 # 4 恢复数据    → docker cp + pg_restore
+# 4b 补迁移     → npx prisma migrate deploy        ← 漏了就 42703
+# 4c 补私钥     → tsx scripts/repair-signing-keys.mts --apply  ← 漏了就签发 503
 # 5 写环境变量  → 4 把密钥现场生成，别忘 LICENSE_DB_URL
 # 6 装依赖构建  → npm ci && npx prisma generate && npm run build
 # 7 起服务      → systemd，绑 127.0.0.1:3100
 # 8 反代 HTTPS  → nginx + acme.sh，证书私钥必须配对
 # 9 接备份      → 至少一个异地目标，跑通 restore-test
-# 10 验收       → §10 十条全绿才算完
+# 10 验收       → §10 各条全绿，含 10.6b 真签一次
 ```
 
-**验收的唯一标准是 §10 的十条全部有期望输出，不是「进程在跑」。**
+3–7 步可以一条命令走完：
+
+```bash
+./scripts/deploy-bootstrap.sh --with-docker-pg --restore-dump=/tmp/licensing.dump
+```
+
+**验收的唯一标准是 §10 各条全部有期望输出，不是「进程在跑」。尤其 10.6b：`/health/ready` 返回 200 只证明私钥文件可读，不证明签出来的东西能验过。**

@@ -18,6 +18,27 @@ Release Note、commit、迁移 ID 与回滚方式。
   按 27.2 关闭了交互式请求按钮（`hideTestRequestButton`）。文档侧栏新增「在线 API 浏览」入口。
 - 新增 `/openapi` → `/developers/openapi` 的 307 临时跳转，方便外部按最直白的路径命中在线文档。
 
+### 新增 · 部署
+
+- **`scripts/deploy-bootstrap.sh`**：一条命令把解包后的目录变成 systemd 管着、健康检查通过的实例。
+  十步幂等：前置检查 → 生成环境文件（缺 `LICENSE_DB_URL` 会补并告警，不静默回退）→ 可选起 PG 容器 →
+  可选恢复 dump → `npm ci` + `prisma generate` → `prisma migrate deploy` → 私钥体检与补齐 →
+  `npm run build` → 写 systemd 单元 → 真验证（`/health/ready` + `/login` + `/` + journal 错误计数）。
+  支持 `--only=build|systemd`、`--skip-db`、`--port`、`--bind`、`--env-file`、`--service-name`（部署第二实例）。
+- **`scripts/repair-signing-keys.mts`**：从 dump/备份恢复后补齐「库里有记录、磁盘上没有」的私钥。
+  默认 DRY-RUN，`--apply` 才写。给 `signing_keys` 缺失行重新生成 Ed25519 密钥对（新行继承原行 `status` 与
+  时间窗），给 confidential_server 凭证补 `credentials/{client_id}.pem` 并同步更新库中公钥。幂等，末尾对
+  「多条 active」告警。
+
+### 修复 · 部署
+
+- **`/health/ready` 探测过浅**：原来只数 `signing_keys` 里 `status='active'` 的行 + 检查密钥目录可读，
+  私钥文件不在盘上时仍返回 200。现在会顺着当前 active 行的 `private_key_ref` 找到具体 `.pem` 并 `access`，
+  失败返回 503 `signing_key_unreadable`（原 `signing_key_dir_unreadable` 不再产生）。这样「从备份恢复但没补
+  私钥」会在重启后立刻暴露，而不是等到第一次签发授权才 503。
+- 文档 §4.4 记录两个必踩的坑：恢复 dump 后必须 `prisma migrate deploy`（否则 42703「列不存在」）、
+  必须补签名私钥（否则 ready 过了但签发 503）；§10 新增 10.6b「签发链路真的能签」验收步骤。
+
 ## [1.5.0] - 2026-11-03
 
 ### 新增 · 公开 API 协议

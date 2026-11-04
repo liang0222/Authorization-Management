@@ -20,14 +20,30 @@ async function checkDatabase(): Promise<string | null> {
 
 async function checkSigningKeys(): Promise<string | null> {
   try {
-    const active = await prisma.signing_keys.count({ where: { status: "active" } });
-    if (active === 0) return "no_active_signing_key";
-    // 目录存在性比“读到私钥”更轻，且不会把私钥内容带进进程日志。
+    // 只数 active 行是不够的：把 dump 恢复到一个新机器时，signing_keys 里有 kid 和
+    // 私钥文件名，但 SIGNING_KEY_DIR 是空的（私钥刻意不随包、不随 dump 走）。
+    // 那种状态下服务会一直自称 ready，直到真正签发授权时才 503
+    // 「签名私钥文件不可读」—— 探针等于没探。
+    // 所以这里一路查到「当前会被用来签名的那个私钥文件确实可读」。
+    const [active] = await prisma.signing_keys.findMany({
+      where: { status: "active" },
+      select: { private_key_ref: true },
+      orderBy: { created_at: "desc" },
+      take: 1,
+    });
+    if (!active) return "no_active_signing_key";
+
     const { access, constants } = await import("node:fs/promises");
+    const { basename, join, resolve } = await import("node:path");
     await access(config.signingKeyDir, constants.R_OK);
+
+    // private_key_ref 只存文件名，和 signing-key.ts 一样用 basename 兜住目录穿越。
+    const keyPath = resolve(join(resolve(process.cwd(), config.signingKeyDir), basename(active.private_key_ref)));
+    await access(keyPath, constants.R_OK);
     return null;
   } catch {
-    return "signing_key_dir_unreadable";
+    // 不回传路径（探针是免登录端点），只说明「密钥目录或当前私钥文件不可用」。
+    return "signing_key_unreadable";
   }
 }
 
