@@ -135,6 +135,21 @@ sudo systemctl restart licensing-saas
 - `install.lock` 是**单机文件锁**，跨机器不互斥
 - 多实例部署时，安装阶段只应让**一个实例**对外提供服务，装完再全部拉起
 
+### 每个实例必须有独立的 `INSTALLER_DATA_DIR`
+
+生产与沙箱如果共用默认的 `/var/lib/universal-installer`，两者会读到**同一把 `installed.lock`**——沙箱第一次启动就会被告知「已安装」，而且它自己那个库其实还没有 `installer_records`。
+
+实测踩到过：沙箱服务没设 `INSTALLER_DATA_DIR`，启动后 `state=INSTALLED source=lock`，但 `licensing_sandbox` 库里 `installer_records` 表根本不存在（迁移都没跑）。
+
+```ini
+# 生产
+Environment=INSTALLER_DATA_DIR=/var/lib/universal-installer
+# 沙箱
+Environment=INSTALLER_DATA_DIR=/var/lib/universal-installer-sandbox
+```
+
+改完重启，沙箱判 `INSTALLED / source=adopted`（依据是它自己的库有 42 张表 + 组织数据），锁写到独立目录，两个实例互不干扰。
+
 ---
 
 ## 9. 排障

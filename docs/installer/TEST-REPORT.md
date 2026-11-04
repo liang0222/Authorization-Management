@@ -370,7 +370,7 @@ reason = 数据库存在安装记录但本地安装锁缺失（疑似被删除�
 
 ---
 
-## 缺陷汇总（本轮修的 7 个）
+## 缺陷汇总（本轮修的 8 个）
 
 | # | 缺陷 | 暴露场景 | 严重度 |
 | --- | --- | --- | --- |
@@ -381,6 +381,7 @@ reason = 数据库存在安装记录但本地安装锁缺失（疑似被删除�
 | 5 | 权限判定查数据库级而非 schema 级 | 场景 7c | P1 |
 | 6 | 迁移报错不可读（Prisma `DbError` 结构体） | 场景 7d | P2 |
 | 7 | 未安装时后台任务刷 `TableDoesNotExist` | 干净包部署 | P1 |
+| 8 | 多实例共用 `INSTALLER_DATA_DIR`，沙箱读到生产的锁 | 生产与沙箱共存 | P1 |
 
 ---
 
@@ -407,6 +408,24 @@ reason = 数据库存在安装记录但本地安装锁缺失（疑似被删除�
 
 修法见 `src/lib/background.ts`：启动期先判安装锁文件，未装则跳过后台任务；`/api/install/run` 成功后补起。
 修后实测：未装实例启动日志 `[boot] 尚未安装，跳过后台任务（安装完成后自动启动）`，等 15s 错误 **0**；装完自动出现 `[webhook] dispatcher started` / `[backup] scheduler started`，再等 26s 错误仍 **0**。
+
+---
+
+## 补充场景 · 生产与沙箱共存
+
+现网同时跑两个实例（`licensing-saas.service` → 3100，`licensing-saas-sandbox.service` → 3101），两者共用同一个项目目录，只有环境文件与数据库不同。
+
+**踩到的坑**：沙箱的 `sandbox.env` 没有设 `INSTALLER_DATA_DIR`，于是它读到了生产写下的 `/var/lib/universal-installer/licensing-saas/installed.lock`，报告 `state=INSTALLED source=lock`。
+
+看起来正常，但实际是假的：`licensing_sandbox` 库当时只有 41 张表 / 7 个迁移，`installer_records` 表根本不存在——安装器以为"装过了"，其实那个库还没跑过本轮新增的迁移。
+
+**处置**：
+
+1. 给沙箱库补迁移：`LICENSE_DB_URL=...licensing_sandbox npx prisma migrate deploy` → 9 迁移 / 42 表
+2. 给沙箱单独的数据目录：`sandbox.env` 加 `INSTALLER_DATA_DIR=/var/lib/universal-installer-sandbox`
+3. 重启沙箱 → `state=INSTALLED source=adopted`（依据是它自己的库有 42 张表 + 组织数据），锁写到独立目录
+
+**这条已写进 `DEPLOYMENT.md` §8**：每个实例必须有独立的 `INSTALLER_DATA_DIR`，否则会读到别人的锁。
 
 ---
 
