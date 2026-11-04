@@ -5,6 +5,8 @@
 #   ./scripts/deploy-bootstrap.sh                     # 从头跑到尾
 #   ./scripts/deploy-bootstrap.sh --with-docker-pg    # 顺带起 PostgreSQL 容器
 #   ./scripts/deploy-bootstrap.sh --restore-dump=/tmp/x.dump
+#       # 恢复前会 DROP SCHEMA public CASCADE（让结果与全新库一致）；
+#       # 想保留库里现有对象加 --keep-schema
 #
 # 脚本全程不提问，所有选择都用参数给定。可以分段跑，段与段幂等：
 #   ./scripts/deploy-bootstrap.sh --skip-db        # 库和数据已就绪，只做装依赖/构建/服务
@@ -50,6 +52,7 @@ FORCE=0
 SKIP_DB=0
 WITH_DOCKER_PG=0
 RESTORE_DUMP=""
+KEEP_SCHEMA=0
 NODE_MAJOR_MIN=22
 
 for arg in "$@"; do
@@ -58,6 +61,7 @@ for arg in "$@"; do
     --skip-db)           SKIP_DB=1 ;;
     --with-docker-pg)    WITH_DOCKER_PG=1 ;;
     --restore-dump=*)    RESTORE_DUMP="${arg#*=}" ;;
+    --keep-schema)       KEEP_SCHEMA=1 ;;
     --port=*)            PORT="${arg#*=}" ;;
     --bind=*)            BIND="${arg#*=}" ;;
     --env-file=*)        ENV_FILE="${arg#*=}"; ENV_DIR="$(dirname "$ENV_FILE")" ;;
@@ -203,10 +207,36 @@ if [ -n "$RESTORE_DUMP" ]; then
   [ -f "$RESTORE_DUMP" ] || die "找不到 $RESTORE_DUMP"
   head -c 5 "$RESTORE_DUMP" | grep -q PGDMP || die "不是 custom format dump（前 5 字节应为 PGDMP）"
   ensure_container_matches_url
+
+  # 恢复之前先把 public schema 清干净。
+  #
+  # 为什么光靠 pg_restore --clean 不够：--clean 只 DROP **dump 里出现过的**对象。
+  # 如果这个库以前迁移过，会留下 dump 里没有的类型（典型是 enum）。
+  # 实测过的具体故障：库里已有 enum credential_environment、但
+  # product_credentials 表被 --clean 重建后没了 environment 列；
+  # 接着跑 prisma migrate deploy 重建该类型时炸
+  #   ERROR: type "credential_environment" already exists (SqlState E42710)
+  # 迁移被记成失败，之后怎么重跑都过不去。
+  #
+  # DROP SCHEMA public CASCADE 顺手把这类残留一起清掉，让恢复结果与
+  # 「全新库灌 dump」完全一致 —— 这正是恢复备份应有的语义。
+  # 已经有数据会被销毁，所以只在指定 --restore-dump 时才做，且日志明说。
+  if [ "$KEEP_SCHEMA" = "1" ]; then
+    warn "--keep-schema：跳过 schema 重置（库里可能有与 dump 冲突的残留类型）"
+  else
+    say "重置 public schema（恢复的语义就是「让库变成 dump 那一刻的样子」）"
+    docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 -q \
+      -c 'DROP SCHEMA IF EXISTS public CASCADE' \
+      -c 'CREATE SCHEMA public' \
+      -c "GRANT ALL ON SCHEMA public TO \"$PG_USER\"" \
+      -c 'GRANT ALL ON SCHEMA public TO public' || die "重置 public schema 失败"
+    ok "schema 已重置"
+  fi
+
   # 必须 docker cp：docker exec -i ... pg_restore < 宿主文件 会让容器读到 0 字节
   docker cp "$RESTORE_DUMP" "$PG_CONTAINER:/tmp/restore.dump"
   docker exec "$PG_CONTAINER" pg_restore -U "$PG_USER" -d "$PG_DB" \
-    --clean --if-exists --no-owner /tmp/restore.dump || warn "pg_restore 有告警（--clean 时会忽略「对象不存在」）"
+    --no-owner /tmp/restore.dump || warn "pg_restore 有告警（对象已存在/权限类告警通常可忽略）"
   docker exec "$PG_CONTAINER" rm -f /tmp/restore.dump
   ok "dump 已恢复"
 else
@@ -231,6 +261,18 @@ else
   say "6/10 应用数据库迁移"
   # ⚠️ 这一步不能省。旧 dump 里的 _prisma_migrations 可能比代码里的迁移少，
   # 少的那几个迁移带来的新列会让所有查询报 42703「列不存在」。
+  #
+  # 另一条：确认用的是本地锁定的 prisma。仓库里没有 node_modules 时
+  # `npx prisma` 会去公网拉最新版（实测拉到 8.0.0-rc.30，把 migrate deploy
+  # 改名成 db migrate 了）。第 5 步已经 npm ci，这里再验一次更稳。
+  PRISMA_VER="$(npx prisma --version 2>/dev/null | sed -n 's/^prisma *: *//p' | head -1)"
+  case "$PRISMA_VER" in
+    7.*) ok "prisma $PRISMA_VER（与项目锁定一致）" ;;
+    "")  warn "读不到 prisma 版本，继续（第 5 步 npm ci 应已装好）" ;;
+    *)   die "prisma 版本是 $PRISMA_VER，项目锁的是 7.x。
+      多半是 node_modules 里没有 prisma，npx 从公网拉了一份。
+      先跑 npm ci 再重试。" ;;
+  esac
   npx prisma migrate deploy
   ok "迁移已全部应用"
 fi

@@ -320,6 +320,26 @@ docker exec licensing-pg rm -f /tmp/restore.dump
 
 `--clean --if-exists` 会先 DROP 再建，**已有数据会被清空**，别在线上库上随手跑。
 
+> ⚠️ **只加 `--clean` 还不够**：它只 DROP **dump 里出现过的**对象。如果这个库以前迁移过，会留下 dump 里没有的东西（典型是 enum 类型），后面跑 `prisma migrate deploy` 就会撞上：
+>
+> ```
+> ERROR: type "credential_environment" already exists   (SqlState E42710)
+> ```
+>
+> 这在本机实测复现过：库里已有 enum `credential_environment`，但 `product_credentials` 表在 `--clean` 时被整个重建、`environment` 列没了；迁移再执行 `CREATE TYPE` 就炸，`_prisma_migrations` 把这条记成失败，之后怎么重跑都过不去。
+>
+> 正确做法是恢复前先把 schema 清干净，让结果与「全新库灌 dump」完全一致：
+>
+> ```bash
+> docker exec licensing-pg psql -U licensing -d licensing -v ON_ERROR_STOP=1 \
+>   -c 'DROP SCHEMA IF EXISTS public CASCADE' \
+>   -c 'CREATE SCHEMA public' \
+>   -c 'GRANT ALL ON SCHEMA public TO licensing' \
+>   -c 'GRANT ALL ON SCHEMA public TO public'
+> ```
+>
+> `deploy-bootstrap.sh --restore-dump=...` 已经把这步做掉了；确实要保留库里现有对象时加 `--keep-schema`。
+
 ### 4.2 路线 B：全新初始化
 
 ```bash
@@ -409,8 +429,22 @@ $ docker exec licensing-pg psql -U licensing -d licensing -At -c \
 ```bash
 cd /root/授权saas
 export LICENSE_DB_URL="postgresql://licensing:密码@127.0.0.1:55432/licensing?schema=public"
+
+# ⚠️ 顺序很重要：必须先装依赖（§6），再跑这条。
+# 仓库里没有 node_modules 时，npx 会去公网拉一份**最新的** prisma——
+# 实测拉到的是 8.0.0-rc.30，它已经把 `migrate deploy` 改名为 `db migrate`，
+# 直接报 CLI.COMMAND_MOVED，或者更糟：用 8.x 的迁移引擎去动 7.x 的库。
+[ -d node_modules/prisma ] || npm ci
+
 npx prisma migrate deploy
 # 期望：The following migration(s) have been applied: ... All migrations have been successfully applied.
+```
+
+先确认用的就是项目锁定的版本：
+
+```bash
+npx prisma --version | grep -E "^prisma|@prisma/client"
+# 期望两行都是 7.10.1（package.json 锁的版本），不是 8.x
 ```
 
 这一条 `deploy-bootstrap.sh` 的第 6 步已经包含（除非你显式 `--skip-db`）。
@@ -1788,6 +1822,8 @@ cd /root/授权saas && ./scripts/offsite-key-backup.sh
 | 补钥后库里出现多条 `active` 签名密钥 | 脚本早期版本没继承原行 `status` | 已修（继承 `status`/`not_before`），确认代码是 v1.5.0 之后；多出来的手工转 `retiring` |
 | 重启后服务跑的是别的目录/端口 | 同名 systemd 单元被另一份部署覆盖了 | `grep WorkingDirectory /etc/systemd/system/*.service`；`deploy-bootstrap.sh` 现在会拒绝这种覆盖 |
 | `pg_restore` 后生产数据没了 | `--restore-dump` 配了默认容器名，`--clean` 清的是生产库 | 用 `--pg-container=` 指定容器；脚本会校验容器端口与 `LICENSE_DB_URL` 是否一致 |
+| `npx prisma migrate` 报 `CLI.COMMAND_MOVED` / 版本是 8.x | 还没装依赖就跑 npx，公网拉到了最新版 Prisma 8 | 先 `npm ci`，再跑；`npx prisma --version` 应是 7.10.1 |
+| migrate 报 `type "xxx" already exists`（E42710） | 恢复 dump 时只用了 `--clean`，库里的孤儿 enum 没清掉 | 恢复前 `DROP SCHEMA public CASCADE` + `CREATE SCHEMA public`；或直接用 `deploy-bootstrap.sh --restore-dump=` |
 
 ---
 
