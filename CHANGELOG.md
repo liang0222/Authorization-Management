@@ -8,6 +8,15 @@ Release Note、commit、迁移 ID 与回滚方式。
 
 ---
 
+## [Unreleased]
+
+### 新增 · 开发者文档
+
+- **在线 OpenAPI 浏览页** `/developers/openapi`：Scalar standalone 渲染 OpenAPI 3.1（左侧目录 / 中间说明 /
+  右侧示例，Ctrl-K 搜索，界面中文）。数据源是同源 `/developers/openapi.yaml`，页面上的 Base URL 就是本实例
+  真实域名。构建时由 `scripts/copy-api-reference.mjs` 把 IIFE 版脚本复制到 `public/vendor/`（不进 git）。
+  按 27.2 关闭了交互式请求按钮（`hideTestRequestButton`）。文档侧栏新增「在线 API 浏览」入口。
+
 ## [1.5.0] - 2026-11-03
 
 ### 新增 · 公开 API 协议
