@@ -170,14 +170,14 @@ rmdir /root/licensing-saas
 
 | 包 | 体积（约） | 文件数 | 说明 |
 | --- | --- | --- | --- |
-| `licensing-saas-v1.5.0.tar.gz` | 约 7.3 MB | 360 | 保留 `scripts/*.sh` 的 `0755` 可执行位 |
-| `licensing-saas-v1.5.0.zip` | 约 7.6 MB | 360 | mode 存在元数据里，python 解压会丢，需 `chmod +x scripts/*.sh` |
+| `licensing-saas-v1.5.0.tar.gz` | 约 6.0 MB | 429 | 保留 `scripts/*.sh` 的 `0755` 可执行位 |
+| `licensing-saas-v1.5.0.zip` | 约 6.3 MB | 429 | mode 存在元数据里，python 解压会丢，需 `chmod +x scripts/*.sh` |
 
 包内 `scripts/` 下三个 `.sh` 带 `0755`：`offsite-key-backup.sh`、`sandbox-bootstrap.sh`、`deploy-bootstrap.sh`。
 
 > **体积、文件数与 sha256 都随内容变化，不要抄这里的数字。** 每次打完包以命令输出的 `sha256=` 为准（上面的打包脚本会打印）。文档只保证一条结构性质：**两包逐文件字节完全一致**。
 
-文件数 = `git ls-files` **减去所有符号链接**（打包脚本对 `os.path.islink()` 判定为真的一律跳过）。当前仓库已经不含符号链接，所以两者相等：**360**。历史上曾有 10 条 `.windsurf/skills/*`（指向 `.agents/skills/`，属本机开发环境配置，clone 下来是断链）与 31 张 `docs/shots/*.png`（截图含真实客户名与登录页口令），v1.5.0 公开发布前已删除并写入 `.gitignore`。数字会随仓库新增文件变化，**以脚本实际统计为准**。
+文件数 = `git ls-files` **减去所有符号链接**（打包脚本对 `os.path.islink()` 判定为真的一律跳过）。当前仓库已经不含符号链接，所以两者相等：**429**（含 `docs/shots/` 的 31 张虚构数据截图与 `docs/installer/` 的 6 篇文档）。历史上曾有 10 条 `.windsurf/skills/*`（指向 `.agents/skills/`，属本机开发环境配置，clone 下来是断链），v1.5.0 公开发布前已删除并写入 `.gitignore`。数字会随仓库新增文件变化，**以脚本实际统计为准**。
 
 **打包后的自检（打之前跑一遍，别把密钥打出去）**：
 
@@ -200,7 +200,7 @@ print("可执行位:", [(m.name, oct(m.mode)) for m in tarfile.open(tg).getmembe
 PY
 # 期望：zip 与 tar 文件数相同 / 只在 zip: [] / 只在 tar: [] / 内容不一致: []
 #      含真 .env: False / 含密钥/备份目录: [] / 含 node_modules/.next: False
-#      可执行位只有 scripts/offsite-key-backup.sh 与 scripts/sandbox-bootstrap.sh 两个 0o755
+#      可执行位只有 scripts/deploy-bootstrap.sh、offsite-key-backup.sh、sandbox-bootstrap.sh 三个 0o755
 ```
 
 **为什么只打 git 跟踪的文件是对的**：本机 `git ls-files` 里 **0 条** 命中 `.env`/`.keys`/`.backups`（`.gitignore` 已经把它们排掉了），而 `.env.example` 在跟踪列表里（模板必须带）。实测两个包的敏感命中都只有 `.env.example` 这一条，是真需要带的模板。
