@@ -1558,6 +1558,7 @@ cd /root/授权saas && ./scripts/offsite-key-backup.sh
 - **登录限流是进程内 `Map`**（`src/lib/http/rate-limit.ts` 注释自述「多实例生产环境应换成 Redis」）。单实例够用，扩容即失效。
 - **数据库密码是开发值** `licensing_dev_pw`。只绑 `127.0.0.1:55432` 所以风险可控，但要长期运营就换掉——**换了记得同步改 `LICENSE_DB_URL`**（见 §5.3）。
 - **生产 `LICENSE_DB_URL` 不在 `/etc/licensing-saas/production.env`**（靠 `DEV_DEFAULTS` 回退）。换机器/换密码会静默连错库，务必按 §5.3 显式写上。
+- **Playwright 登录态文件** `tests/e2e/.auth/owner.json` 里是**真实会话 cookie**。它曾被错误地提交进 git 并随 v1.5.0 前几版包分发（该会话在 `admin_sessions` 中已查不到，属已失效）。现在 `tests/e2e/.auth/` 已在 `.gitignore`，由 `tests/e2e/auth.setup.ts` 每次现场重建目录并写入。**如果你手上还有旧包，请不要把 `tests/e2e/.auth/owner.json` 拷进任何环境**；同时建议在本实例上强制一次全员重新登录（把 `admin_sessions` 里未过期行 `revoked_at` 置为 `now()`）。
 - **`[同机其他站点]` 没有 HTTPS**（只有 `listen 80`，443 落到 `ssl_reject_handshake on` 的 default_server，握手报 `unrecognized name`）。与本项目无关，要开就单独签证书。
 
 ---
