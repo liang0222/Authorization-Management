@@ -10,6 +10,27 @@ Release Note、commit、迁移 ID 与回滚方式。
 
 ## [Unreleased]
 
+### 安全 · 公开发布前清理
+
+把本机专属的标识从代码与文档里彻底剥离，仓库可以安全公开托管：
+
+- 文档中的真实域名 / 公网 IP / 备份账号口令替换为 `[HOST]` / `[OFFSITE_HOST]` /
+  `[BK_USER]` / `[BK_PASS]` / `<你的域名>` 等占位符（10 个文件、66 处）。
+- `prisma/seed.ts` 的 14 个演示客户改为「示例客户 NN」，邮箱统一走 RFC 2606 的
+  `.example`；激活记录里的真实公网 IP 换成 RFC 5737 TEST-NET-3 地址。
+- 删除 `docs/shots/`（31 张 7.0M）：截图含真实客户名与登录页明文口令，而 seed
+  已改为虚构数据，重生成要重跑 seed 会清空生产库，因此直接移除；三处引用改为
+  「本地跑起来自己截」。
+- 删除 10 条 `.windsurf/skills/*` 符号链接（clone 后必然断链）并写入 `.gitignore`。
+- 登录页的演示账号提示块加 `NODE_ENV !== "production"` 守卫：production 构建会
+  整块摇掉（已在 `.next` 产物里复查无残留），开发时仍可见。
+- 新增 `.gitattributes`（`* text=auto eol=lf`），避免 Windows 上 clone 把 `.sh`
+  转成 CRLF 后 Linux 报 `bad interpreter: /bin/bash^M`。
+- `package.json` 补 `license: UNLICENSED` 与 `engines.node >= 22`；新增 `LICENSE`。
+- 单元测试与 SDK 示例里的真实域名 / IP 一并换成 `example.com` 与 TEST-NET。
+- 以上清理同时重写了 git 历史（`filter-branch --tree-filter`），保证任何历史提交
+  都取不出原始值。
+
 ### 新增 · 开发者文档
 
 - **在线 OpenAPI 浏览页** `/developers/openapi`：Scalar standalone 渲染 OpenAPI 3.1（左侧目录 / 中间说明 /
