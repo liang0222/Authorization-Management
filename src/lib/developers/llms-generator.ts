@@ -5,6 +5,13 @@ import { DOCS_SECTIONS, MACHINE_READABLE_FILES } from "@/lib/developers/docs-nav
 import { ERROR_STATUS } from "@/lib/http/api";
 import { PUBLIC_RATE_LIMITS } from "@/lib/domain/public-rate-limits";
 import { WEBHOOK_EVENT_TYPES } from "@/lib/services/webhook-events";
+import {
+  PUBLIC_API_ENV,
+  PUBLIC_SANDBOX_ENV,
+  displayBaseUrl,
+  readPublicBaseUrls,
+  type PublicBaseUrls,
+} from "@/lib/developers/base-urls";
 
 /**
  * `llms.txt` / `llms-full.txt` 的生成器（规格 27.17）。
@@ -29,8 +36,20 @@ import { WEBHOOK_EVENT_TYPES } from "@/lib/services/webhook-events";
  * 测试 `tests/unit/llms.test.ts` 会扫描生成结果里的密钥样式，防止有人手滑写进来。
  */
 
-export const API_BASE_PLACEHOLDER = "https://<LICENSE_API_DOMAIN>/api/v1";
-export const SANDBOX_BASE_PLACEHOLDER = "https://<LICENSE_SANDBOX_API_DOMAIN>/api/v1";
+/**
+ * 基础地址两行。
+ *
+ * 早期这里写的是 `https://<LICENSE_API_DOMAIN>/api/v1` 这种占位符 —— 对内部人
+ * 是「待填」，对拿到 llms-full.txt 的 AI 或集成方就是**没写完**：它要么照着
+ * `<LICENSE_API_DOMAIN>` 去拼 URL，要么回头问人。现在改成读运行实例的配置，
+ * 没配置就明说「未配置」并给出环境变量名，不编一个像真的地址。
+ */
+export function baseUrlLines(urls: PublicBaseUrls = readPublicBaseUrls()): string[] {
+  return [
+    `Production : ${displayBaseUrl(urls.production, PUBLIC_API_ENV)}`,
+    `Sandbox    : ${displayBaseUrl(urls.sandbox, PUBLIC_SANDBOX_ENV)}`,
+  ];
+}
 
 export const LLMS_INDEX_PATH = "/developers/llms.txt";
 export const LLMS_FULL_PATH = "/developers/llms-full.txt";
@@ -200,7 +219,10 @@ export function buildLlmsIndex(spec: OpenApiDocument = loadOpenApiDocument()): s
 }
 
 /** 完整文本：索引 + 请求约定 + 逐端点详述 + 状态/错误/限流/Webhook。 */
-export function buildLlmsFull(spec: OpenApiDocument = loadOpenApiDocument()): string {
+export function buildLlmsFull(
+  spec: OpenApiDocument = loadOpenApiDocument(),
+  urls: PublicBaseUrls = readPublicBaseUrls(),
+): string {
   const version = spec.info?.version ?? "unknown";
   const tagDescriptions = (spec.tags ?? [])
     .filter((tag) => tag.description)
@@ -214,8 +236,7 @@ export function buildLlmsFull(spec: OpenApiDocument = loadOpenApiDocument()): st
     "",
     "## 1. 基础地址",
     "",
-    `Production : ${API_BASE_PLACEHOLDER}`,
-    `Sandbox    : ${SANDBOX_BASE_PLACEHOLDER}`,
+    ...baseUrlLines(urls),
     "",
     "Sandbox 与生产使用独立数据库、独立签名密钥、独立产品凭证与独立限流命名空间。",
     "任何 SDK 或客户端都不得把生产域名写成默认值。",

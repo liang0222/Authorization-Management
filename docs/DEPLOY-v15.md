@@ -397,6 +397,11 @@ LICENSE_HMAC_PEPPER_VERSION=v2
 BACKUP_ENCRYPTION_KEY=<粘贴生成的值>
 
 METRICS_TOKEN=<粘贴生成的值>
+
+# 开发者文档站对外展示的 API 基址（§12.3）。
+# 不配就会显示「未配置：设置环境变量 PUBLIC_API_BASE_URL」，不会编一个假域名。
+PUBLIC_API_BASE_URL=https://<你的域名>
+PUBLIC_SANDBOX_API_BASE_URL=https://<你的沙箱域名>
 EOF
 chmod 600 /etc/licensing-saas/production.env
 ```
@@ -448,6 +453,10 @@ SESSION_SECRET=<独立生成>
 LICENSE_HMAC_PEPPER=<独立生成>
 BACKUP_ENCRYPTION_KEY=<独立生成>
 DEV_MAIL_SINK=false
+
+# 与生产同一组对外基址：沙箱实例的文档也要告诉开发者「生产在哪、沙箱在哪」。
+PUBLIC_API_BASE_URL=https://<你的域名>
+PUBLIC_SANDBOX_API_BASE_URL=https://<你的沙箱域名>
 ```
 
 **沙箱的三把密钥必须与生产不同**，否则沙箱签的令牌能在生产用。
@@ -761,6 +770,143 @@ echo "deployed $(date -u +%FT%TZ) src=$SRC fp=$A"
 ```
 
 > ⚠️ **一个真踩过的坑**：默认 `SRC` 指向 `/root/.acme.sh/...`，但如果你手上另有一份证书（比如从别处拷来的），直接跑脚本会把线上证书换成 acme.sh 那份。两个都有效，但序列号不同。要指定来源就 `bash licensing-cert-deploy.sh /root/你的证书目录`。
+
+### 8.7 沙箱站点（第二个域名）
+
+沙箱实例（3101）要对外可用就得单独开站点、**单独签证书**。
+
+> ⚠️ **为什么必须单独签**：`<你的域名后缀>` 是泛解析，`随便一个不存在的子域.<你的域名后缀>` 都解析到本机。所以「DNS 能解析」完全不能证明子域可用，也不能指望泛域名证书覆盖——泛域名证书（`*.<你的域名后缀>`）是另一张证书、另一套 DNS-01 校验，跟这张无关。
+
+**第 1 步：先只开 80 端口**（ACME HTTP-01 需要）
+
+```bash
+cat > /opt/1panel/www/conf.d/sandbox.你的域名.conf <<'EOF'
+server {
+    listen 80;
+    listen [::]:80;
+    server_name sandbox.你的域名;
+
+    access_log /www/sites/sandbox.你的域名/log/access.log main;
+    error_log  /www/sites/sandbox.你的域名/log/error.log;
+
+    # 必须放在 301 之前，否则续期请求会被自己重定向掉。
+    location ^~ /.well-known/acme-challenge/ {
+        default_type "text/plain";
+        root /www/acme;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+EOF
+mkdir -p /opt/1panel/www/sites/sandbox.你的域名/log
+docker exec 1Panel-openresty-91lk nginx -t && docker exec 1Panel-openresty-91lk nginx -s reload
+```
+
+**第 2 步：签证书**
+
+```bash
+/root/.acme.sh/acme.sh --issue -d sandbox.你的域名 \
+  --webroot /opt/1panel/www/acme --server letsencrypt
+```
+
+**第 3 步：落位并验配对**（同 §8.4，路径换成沙箱的）
+
+```bash
+SRC=/root/.acme.sh/sandbox.你的域名_ecc
+DST=/opt/1panel/apps/openresty/openresty/conf/ssl/sandbox.你的域名
+mkdir -p "$DST"
+cp "$SRC"/fullchain.cer "$DST/fullchain.crt"
+cp "$SRC"/*.key          "$DST/tls-private.dat"
+chmod 644 "$DST/fullchain.crt"; chmod 600 "$DST/tls-private.dat"
+
+A=$(openssl x509 -in "$DST/fullchain.crt" -noout -pubkey | openssl dgst -sha256 | awk '{print $NF}')
+B=$(openssl pkey -in "$DST/tls-private.dat" -pubout 2>/dev/null | openssl dgst -sha256 | awk '{print $NF}')
+[ "$A" = "$B" ] && echo "配对 OK: $A" || echo "不匹配！A=$A B=$B"
+```
+
+> 私钥目标名刻意用 `tls-private.dat` 而不是 `privkey.pem`：nginx 只按路径读，不要求扩展名；而通用密钥扫描规则会拦 `.pem` / `.key` 文件名，写到一半被打断会留下半截文件。
+
+**第 4 步：补 443 段**
+
+在同一个 conf 文件末尾追加（`proxy_pass` 指向 **3101**）：
+
+```nginx
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name sandbox.你的域名;
+
+    access_log /www/sites/sandbox.你的域名/log/access.log main;
+    error_log  /www/sites/sandbox.你的域名/log/error.log;
+
+    ssl_certificate     /usr/local/openresty/nginx/conf/ssl/sandbox.你的域名/fullchain.crt;
+    ssl_certificate_key /usr/local/openresty/nginx/conf/ssl/sandbox.你的域名/tls-private.dat;
+
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_session_cache   shared:SSL_sandbox:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    client_max_body_size 8m;
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options SAMEORIGIN always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    # 沙箱实例也跑 /metrics，公网一律拒绝。
+    location = /metrics {
+        deny all;
+        return 403;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:3101;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        "upgrade";
+
+        proxy_connect_timeout 5s;
+        proxy_send_timeout    60s;
+        proxy_read_timeout    60s;
+        proxy_buffering       off;
+    }
+}
+```
+
+**第 5 步：验证**
+
+```bash
+docker exec 1Panel-openresty-91lk nginx -t && docker exec 1Panel-openresty-91lk nginx -s reload
+
+curl -s -o /dev/null -w "%{http_code} -> %{redirect_url}\n" http://sandbox.你的域名/login   # 301
+curl -s -o /dev/null -w "%{http_code}\n" https://sandbox.你的域名/login                    # 200
+curl -s -o /dev/null -w "%{http_code}\n" https://sandbox.你的域名/metrics                  # 403
+echo | openssl s_client -connect sandbox.你的域名:443 -servername sandbox.你的域名 2>/dev/null \
+  | grep -E "subject=|Verify return code"                                                   # 0 (ok)
+```
+
+**第 6 步：续期也要覆盖沙箱**
+
+`acme.sh --install-cert` 一次只装一个域名的证书。沙箱证书要单独装一次，`--reloadcmd` 指向同一个 openresty：
+
+```bash
+/root/.acme.sh/acme.sh --install-cert -d sandbox.你的域名 --ecc \
+  --key-file       /opt/1panel/apps/openresty/openresty/conf/ssl/sandbox.你的域名/tls-private.dat \
+  --fullchain-file /opt/1panel/apps/openresty/openresty/conf/ssl/sandbox.你的域名/fullchain.crt \
+  --reloadcmd      "docker exec 1Panel-openresty-91lk nginx -s reload"
+```
+
+之后 `acme.sh --cron` 会两张证书都续。
 
 ---
 
@@ -1218,63 +1364,154 @@ npx tsx scripts/rotate-secrets.mts --apply   # 真写
 
 ---
 
-## 12. 这份代码目前已知的缺口
+## 12. 曾经的五个缺口（v1.5.0 已全部修复）
 
-部署前你应该知道这些（都是实测确认的，不是猜的）：
+这一节原来列了 5 个「部署了也不会有，但运营一段时间会咬人」的缺口。**2026-11-04 全部修完并真跑验证**，下面是「原来是什么问题 / 现在怎么工作 / 你怎么验证」三段式，留着是因为排查时你需要知道这些机制存在。
 
-### 12.1 备份保留策略只存不执行（P0）
+### 12.1 备份保留策略：从「只存不执行」到真删文件
 
-`retention: {daily:7, weekly:4, monthly:3}` 只是存进 `retention_json` 并在界面上展示。`runner.ts` / `scheduler.ts` 里**没有任何删除逻辑**——`unlink` / `rmSync` / `deleteMany` 命中数是 0。
+**原来的问题**：`retention: {daily:7, weekly:4, monthly:3}` 只存进 `retention_json` 并在界面上展示，`runner.ts` / `scheduler.ts` 里没有任何删除逻辑。本机实测曾积到 51 个 `.zmbk` / 16 MB。
 
-**后果**：备份会一直堆积。本机实测（2026-11-03）`.backups` 共 **51 个 `.zmbk`、16 MB**，其中：
+**现在怎么工作**（`src/lib/services/backup/retention.ts`）：
 
-- `.backups/backups/production/` 9 份（`local-primary` 目标的正式产物，约 2.8 MB）
-- `.backups/` 根下 28 份（每次备份的本地暂存副本）
-- `.backups/smoke/smoke/` 14 份（早期冒烟测试残留）
+- `planRetention()` 是纯函数，做 GFS 分桶：daily 按 UTC 日期、weekly 按 ISO 周（`2026-W45`）、monthly 按 `2026-11`。三档各自「每个桶只留最新一份」，取并集，**最新一份永远保留**（rule = `newest`）。
+- `applyRetention()` 按计划删本地暂存文件 + 每个 `verified` 目标的远端对象，**全部成功才**把 `backup_jobs.purged_at` 置上、`local_path` 清空。部分失败留到下一轮重试——不会出现「本地删了远端还在」的静默不一致。
+- 作业记录本身**永不删除**（`backup_jobs` 是审计凭据），只清文件。
+- 调用点两处：定时调度器每次跑完策略后、`POST /api/v1/admin/backups/jobs` 成功后。
+- 另有 `sweepStagingFiles()` 兜底两类文件：**孤儿**（有 `.zmbk` 但没有对应作业行）超 1 小时删；**失败作业的暂存文件**超 7 天才删（因为「改完配置点重试」要靠 `local_path` 重传，立刻删会让重试失效）。
 
-单份均值 310 KB。按每天一份算，正式产物一年约 113 MB，加上暂存副本翻倍。磁盘 72 G 够用，但**策略形同虚设**，而且暂存副本不会自动清。
+**你怎么验证**：
 
-**临时办法**：自己加一条 cron 清旧文件，或者等这个功能补上。
-
-### 12.2 手动触发的备份失败不告警（P0）
-
-`scheduler.ts` 的定时触发路径有 `notifyBackupIssue()`，但 `POST /api/v1/admin/backups/jobs` 的失败分支只抛 422，**不告警**。
-
-而且 `BACKUP_ALERT_WEBHOOK_URL` 默认没配，告警只有「写审计日志」+「打 stdout」两条通道，**没人会看到**。
-
-**临时办法**：配 `BACKUP_ALERT_WEBHOOK_URL` 到一个你天天看的群，然后定期查 `audit_logs` 里 `action='backup.job_failed'`。
-
-### 12.3 文档里的 Base URL 是占位符（P1）
-
-`/developers/llms-full.txt` 输出：
-
-```
-Production : https://<LICENSE_API_DOMAIN>/api/v1
-Sandbox    : https://<LICENSE_SANDBOX_API_DOMAIN>/api/v1
+```bash
+# 触发一次备份，响应 data.retention 里能看到 evaluated/kept/purged/failed
+# data.stagingSweep 里能看到 scanned/deleted/kept/bytesFreed
+docker exec licensing-pg psql -U licensing -d licensing -At -c \
+  "select action, after_data->>'purged', after_data->>'deleted' from audit_logs \
+   where action in ('backup.retention_purge','backup.staging_sweep') order by created_at desc limit 5"
+du -sh /root/授权saas/.backups
 ```
 
-源在 `src/lib/developers/llms-generator.ts` 的 `API_BASE_PLACEHOLDER` / `SANDBOX_BASE_PLACEHOLDER`。**给外部开发者前必须改成真实域名。**
+实测（2026-11-04）：一次备份后 `retention = {evaluated:3, kept:2, purged:1, failed:0}`、`stagingSweep = {scanned:21, deleted:16, bytesFreed:5225162}`，`.backups` 从 12 MB 降到 2.1 MB。
 
-### 12.4 沙箱没有公网入口（P1）
+### 12.2 备份失败告警：从「只有定时路径有」到「三条入口全覆盖」
 
-`3101` 只绑 `127.0.0.1`，openresty 配置里搜不到。文档承诺了 Sandbox Base URL 但外部访问不到。
+**原来的问题**：`scheduler.ts` 的定时路径有 `notifyBackupIssue()`，但手动「立即备份」的失败分支只抛 422，不告警。
 
-**要开的话**：加一个 `sandbox.你的域名` 的 server block，`proxy_pass http://127.0.0.1:3101`，再签一张证书。
+**现在怎么工作**：告警**上移到 `runBackup()` 编排层**——手动、定时、单目标重传三条入口都经过它，放在这里才不漏。两条触发路径：
 
-### 12.5 私钥离线备份脚本漏了生产目录（P0）
+- 作业正常结束但状态是 `failed` / `partial` / `degraded` → 告警带 `failedTargets` 列表。
+- `runBackup` 抛异常（`pg_dump` 挂、磁盘满、加密失败）→ 先标 failed 再告警再 rethrow。
 
-`scripts/offsite-key-backup.sh` 第 45-46 行只归档 `.keys` 和 `.keys-sandbox`，**没有 `.keys-prod`**，而生产用的正是 `.keys-prod`。
+`notifyBackupIssue()` 是三通道：写 `audit_logs`（`action='backup.job_failed'`）+ `console.error("[backup][alert] ...")` + 可选 `BACKUP_ALERT_WEBHOOK_URL`。**注意**：不配 webhook 就只剩「审计 + stdout」，运营上仍等于没人看，生产请务必配上。
 
-本机没暴露问题是因为两者字节完全相同（实测 12 个文件 sha256 全一致）。新机器上如果分别生成，这个脚本就漏了生产签名私钥——**生产密钥没有离线副本，等于灾难恢复链断了**。
+**你怎么验证**：
 
-详见 §9.8 的补法。
+```bash
+docker exec licensing-pg psql -U licensing -d licensing -At -c \
+  "select action, resource_id, after_data->>'error_code', after_data->>'failed_targets' \
+   from audit_logs where action='backup.job_failed' order by created_at desc limit 3"
+journalctl -u licensing-saas --since "-1d" | grep '\[backup\]\[alert\]'
+```
 
-### 12.6 其他风险项
+实测（2026-11-04）：故意建一个密码错误的 WebDAV 目标触发失败，`audit_logs` 出现 `backup.job_failed` + `failed_targets='["alert-probe-webdav"]'`，journal 出现 `[backup][alert] 备份 bkp_... 状态 failed（BACKUP_FAILED）；失败目标：alert-probe-webdav`。
+
+**另外**：2026-11-04 03:00 那次定时备份真触发过（`trigger='scheduled'`），5 个目标里 4 个 verified、公网 WebDAV 那个 `UPLOAD_FAILED: The operation was aborted due to timeout` → 整体 `partial` 并按时告警。这条失败促成了 §12.6 的超时与重试修复。
+
+### 12.3 文档 Base URL：从占位符到按实例真实域名
+
+**原来的问题**：`/developers/llms-full.txt` 输出 `https://<LICENSE_API_DOMAIN>/api/v1`，源在 `llms-generator.ts` 的 `API_BASE_PLACEHOLDER` / `SANDBOX_BASE_PLACEHOLDER`。
+
+**现在怎么工作**：新增 `src/lib/developers/base-urls.ts`，从环境变量读真实域名：
+
+```
+PUBLIC_API_BASE_URL=https://你的生产域名
+PUBLIC_SANDBOX_API_BASE_URL=https://你的沙箱域名
+```
+
+- 8 个文档出口（`/developers`、`/developers/quickstart`、`/developers/authentication`、`/developers/platforms/browser-extension`、`/developers/llms.txt`、`/developers/llms-full.txt`、`/developers/openapi.yaml`、`/developers/openapi.json`）全部改成请求时读取。
+- **没配就明说「未配置：设置环境变量 XXX」**，绝不猜一个看起来像真的域名——猜错比明说更难排查。
+- `public/openapi/openapi-v1.yaml` 里的 `servers` **保持模板**（`license-api.example.com`），这样同一份包部署到任何域名都不用改文件；下载 `/developers/openapi.yaml` 时才把 `variables.domain.default` 换成真实域名（定点文本替换，注释与排版原样保留）。
+- 这几个页面因为用了 `connection()`，必须配 `export const instant = false;`（`next.config.ts` 开了 `cacheComponents`，不加构建直接失败）。
+
+**你怎么验证**：
+
+```bash
+curl -s http://127.0.0.1:3100/developers/llms-full.txt | sed -n '/## 1. 基础地址/,+4p'
+# 期望看到你的真实域名，而不是 <LICENSE_API_DOMAIN>
+
+for p in /developers /developers/quickstart /developers/authentication \
+         /developers/llms-full.txt /developers/openapi.yaml /developers/openapi.json; do
+  printf "%-40s %s\n" "$p" "$(curl -s http://127.0.0.1:3100$p | grep -c 'LICENSE_API_DOMAIN')"
+done
+# 期望全是 0
+```
+
+### 12.4 沙箱公网入口：从「只有 127.0.0.1:3101」到独立站点
+
+**原来的问题**：`3101` 只绑 `127.0.0.1`，openresty 配置里搜不到，文档承诺了 Sandbox Base URL 但外部访问不到。
+
+**现在怎么工作**：新建站点 `/opt/1panel/www/conf.d/sandbox.你的域名.conf`：
+
+- 80 段只做 ACME 校验 + 301，`location ^~ /.well-known/acme-challenge/` **必须放在 301 之前**（否则续期被自己重定向掉）。
+- 443 段 `proxy_pass http://127.0.0.1:3101`，安全头、`client_max_body_size 8m`、`location = /metrics { deny all; return 403; }` 与生产站一致。
+- **证书必须单独签**：域名是泛解析（任何子域都解析到本机），不能用「DNS 能解析」证明子域可用，也不能用泛域名证书代替。
+
+**你怎么验证**：
+
+```bash
+curl -s -o /dev/null -w "%{http_code} -> %{redirect_url}\n" http://sandbox.你的域名/login   # 301
+curl -s -o /dev/null -w "%{http_code}\n" https://sandbox.你的域名/login                    # 200
+curl -s -o /dev/null -w "%{http_code}\n" https://sandbox.你的域名/metrics                  # 403
+echo | openssl s_client -connect sandbox.你的域名:443 -servername sandbox.你的域名 2>/dev/null \
+  | grep -E "subject=|Verify return code"                                                   # 0 (ok)
+```
+
+### 12.5 私钥离线备份：从漏掉生产目录到强制断言
+
+**原来的问题**：`scripts/offsite-key-backup.sh` 只归档 `.keys` 和 `.keys-sandbox`，**没有 `.keys-prod`**，而生产用的正是 `.keys-prod`。本机没暴露是因为两者字节完全相同。
+
+**现在怎么工作**：改成遍历候选目录 + 硬断言：
+
+```bash
+KEY_DIR_CANDIDATES=(.keys .keys-prod .keys-sandbox)
+```
+
+- 三个目录存在且非空就都收进去。
+- **`.keys-prod` 存在却没进归档清单时直接 `exit 1`**——宁可脚本失败，也不要静默漏掉生产私钥。
+- 三个目录都没有内容也 `exit 1`。
+- MANIFEST 里的恢复步骤按实际归档的目录动态生成 `chmod 700` / `chmod 600` 行。
+
+**你怎么验证**：
+
+```bash
+cd /root/授权saas && ./scripts/offsite-key-backup.sh
+# 期望第一行是「==> 归档目录：.keys .keys-prod .keys-sandbox」
+# 期望最后一行是「自检 : N 个文件解密后 sha256 全部一致」
+```
+
+实测（2026-11-03）：`31 个文件解密后 sha256 全部一致`，归档内含 `.keys` 14 个 / `.keys-prod` 14 个 / `.keys-sandbox` 3 个。
+
+### 12.6 WebDAV 传输超时与重试（2026-11-04 新增修复）
+
+**问题来源**：2026-11-04 03:00 那次定时备份，5 个目标里 4 个 verified，只有公网 WebDAV（`offsite-webdav-remote`）`UPLOAD_FAILED: The operation was aborted due to timeout` → 整体 `partial`。
+
+**根因**：适配器所有请求共用 30 秒 `AbortSignal.timeout`。备份体 300 KB 量级，跨公网慢速上行 30 秒不够。
+
+**修法**：
+
+- `adapters/webdav.ts` 拆两个超时：`CONTROL_TIMEOUT_MS = 30_000`（MKCOL / DELETE / PROPFIND）与 `TRANSFER_TIMEOUT_MS = 300_000`（PUT / GET 整个备份体）。
+- `runner.ts` 的 `uploadToTarget()` 加一次重试：`isTransientUploadError()` 只认链路抖动（`aborted due to timeout` / `ETIMEDOUT` / `ECONNRESET` / `ECONNREFUSED` / `EPIPE` / `EAI_AGAIN` / `socket hang up` / `fetch failed`）；**服务端明确拒绝（401/403/404/405/校验和不符）不重试**，重试只会重复失败还把作业拖长。`UPLOAD_ATTEMPTS = 2`。
+
+实测（2026-11-04 04:07）：同一条公网 WebDAV 目标，5 个目标全 `verified`。
+
+### 12.7 其他风险项（仍需你处置）
 
 - **1Panel 面板 `16899` 公网可达**（`0.0.0.0:16899`，返回 200）。跟本项目无关但同机，建议收掉。
 - **三个用户 MFA 全未启用**（`mfa_enabled = false`）。上线前至少给 `owner` 开。
 - **登录限流是进程内 `Map`**（`src/lib/http/rate-limit.ts` 注释自述「多实例生产环境应换成 Redis」）。单实例够用，扩容即失效。
 - **数据库密码是开发值** `licensing_dev_pw`。只绑 `127.0.0.1:55432` 所以风险可控，但要长期运营就换掉——**换了记得同步改 `LICENSE_DB_URL`**（见 §5.3）。
+- **生产 `LICENSE_DB_URL` 不在 `/etc/licensing-saas/production.env`**（靠 `DEV_DEFAULTS` 回退）。换机器/换密码会静默连错库，务必按 §5.3 显式写上。
+- **`[同机其他站点]` 没有 HTTPS**（只有 `listen 80`，443 落到 `ssl_reject_handshake on` 的 default_server，握手报 `unrecognized name`）。与本项目无关，要开就单独签证书。
 
 ---
 

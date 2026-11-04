@@ -1,11 +1,25 @@
 import type { Metadata } from "next";
+import { connection } from "next/server";
 import { DocsHeader } from "@/components/developers/docs-shell";
 import { DocsSection, ParamsTable } from "@/components/developers/endpoint";
+import { PUBLIC_SANDBOX_ENV, hostOf, readPublicBaseUrls } from "@/lib/developers/base-urls";
 import { CodeBlock } from "@/components/developers/code-block";
+
+/**
+ * 这几个页面必须按请求渲染：基础地址来自运行实例的环境变量（`PUBLIC_API_BASE_URL` /
+ * `PUBLIC_SANDBOX_API_BASE_URL`），构建机上没有这些值。`cacheComponents` 下
+ * `connection()` 会让路由变成阻塞式，需要显式 `instant = false` 才能构建通过。
+ */
+export const instant = false;
+
 
 export const metadata: Metadata = { title: "认证" };
 
-export default function AuthenticationPage() {
+export default async function AuthenticationPage() {
+  // 报文示例里的 Host 必须是真实主机名，否则照着抄的人会把它当模板发出去。
+  await connection();
+  const sandboxHost = hostOf(readPublicBaseUrls().sandbox, PUBLIC_SANDBOX_ENV);
+
   return (
     <>
       <DocsHeader
@@ -38,7 +52,7 @@ export default function AuthenticationPage() {
           language="http"
           filename="请求头"
           code={`POST /api/v1/activation-challenges HTTP/1.1
-Host: <LICENSE_SANDBOX_DOMAIN>
+Host: ${sandboxHost}
 Content-Type: application/json
 X-Client-ID: <your-client-id>
 X-SDK-Version: python-example/1.0.0

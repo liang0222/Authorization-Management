@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { decryptBackup, encryptBackup, sha256Hex } from "@/lib/services/backup/crypto";
-import { backupObjectKey, decideJobStatus } from "@/lib/services/backup/runner";
+import {
+  UPLOAD_ATTEMPTS,
+  backupObjectKey,
+  decideJobStatus,
+  isTransientUploadError,
+} from "@/lib/services/backup/runner";
 import { isSameOriginTrailingSlashRedirect } from "@/lib/services/backup/adapters/webdav";
 import { isCronLike, retentionSchema } from "@/lib/services/backup/schemas";
 
@@ -162,5 +167,39 @@ describe("WebDAV MKCOL 尾斜杠重定向识别", () => {
     expect(isSameOriginTrailingSlashRedirect(null, requested)).toBe(false);
     expect(isSameOriginTrailingSlashRedirect("", requested)).toBe(false);
     expect(isSameOriginTrailingSlashRedirect("http://[::bad", requested)).toBe(false);
+  });
+});
+
+describe("上传重试判定", () => {
+  it("超时、连接重置、DNS 抖动都算可重试", () => {
+    for (const message of [
+      "The operation was aborted due to timeout",
+      "read ETIMEDOUT",
+      "read ECONNRESET",
+      "connect ECONNREFUSED [OFFSITE_HOST]:5244",
+      "write EPIPE",
+      "getaddrinfo EAI_AGAIN",
+      "socket hang up",
+      "fetch failed",
+    ]) {
+      expect(isTransientUploadError(message), message).toBe(true);
+    }
+  });
+
+  it("服务端明确拒绝不算可重试（重试只会重复失败）", () => {
+    for (const message of [
+      "WebDAV PUT 失败：HTTP 401",
+      "WebDAV PUT 失败：HTTP 403",
+      "WebDAV PUT 失败：HTTP 404",
+      "创建目录失败：backups（HTTP 405）",
+      "远端 SHA-256 为 abc",
+      "WebDAV 端点不是 https，且没有显式设 tlsVerify=false 放行",
+    ]) {
+      expect(isTransientUploadError(message), message).toBe(false);
+    }
+  });
+
+  it("尝试次数是 2：够覆盖偶发抖动，又不会把作业拖长", () => {
+    expect(UPLOAD_ATTEMPTS).toBe(2);
   });
 });

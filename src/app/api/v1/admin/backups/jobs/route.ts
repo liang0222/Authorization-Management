@@ -4,6 +4,8 @@ import { prisma } from "@/lib/db";
 import { withAdmin } from "@/lib/auth/guard";
 import { cursorFields, ApiError, okResponse, readJson, readListQuery } from "@/lib/http/api";
 import { runBackup } from "@/lib/services/backup/runner";
+import { applyRetention, sweepStagingFiles } from "@/lib/services/backup/retention";
+import { notifyBackupConfigIssue } from "@/lib/services/backup/alerts";
 import { jobDto } from "@/lib/services/backup/serialize";
 
 /**
@@ -63,27 +65,66 @@ export async function POST(req: NextRequest) {
   return withAdmin(req, "backup:write", async ({ session, requestId }) => {
     const body = await readJson(req, runSchema);
 
-    if (body.policyId) {
-      const policy = await prisma.backup_policies.findFirst({
-        where: { id: body.policyId, organization_id: session.organization.id },
-        select: { id: true, enabled: true },
-      });
-      if (!policy) throw new ApiError(404, "NOT_FOUND", "备份策略不存在");
-    }
+    const policy = body.policyId
+      ? await prisma.backup_policies.findFirst({
+          where: { id: body.policyId, organization_id: session.organization.id },
+          select: { id: true, name: true, enabled: true },
+        })
+      : null;
+    if (body.policyId && !policy) throw new ApiError(404, "NOT_FOUND", "备份策略不存在");
 
+    let result;
     try {
-      const result = await runBackup({
+      result = await runBackup({
         organizationId: session.organization.id,
         userId: session.user.id,
         policyId: body.policyId ?? null,
         trigger: body.trigger ?? "manual",
         onlyDestinationId: body.onlyDestinationId ?? null,
       });
-      const job = await prisma.backup_jobs.findUniqueOrThrow({ where: { id: result.jobId }, include: INCLUDE });
-      return okResponse({ ...result, job: jobDto(job) }, requestId, { status: 201 });
     } catch (error) {
-      // 备份失败已经把 job 标成 failed 并写入 error_code，这里把原因原样带出去。
-      throw new ApiError(422, "BACKUP_FAILED", (error as Error).message.slice(0, 300));
+      const message = (error as Error).message;
+      // 作业建出来之后才失败的，runBackup 内部已经按最终状态写审计 + 打 stdout 告警；
+      // 但「一个目标都没有」这类在 pg_dump 之前就抛的配置错误还没有 job 可挂，
+      // 必须在这里补一条策略级告警，否则后台点一次「立即备份」失败，只有页面上一句红字。
+      const noTarget = message.includes("没有可用的备份目标");
+      if (noTarget && policy) {
+        await notifyBackupConfigIssue({
+          organizationId: session.organization.id,
+          policyId: policy.id,
+          policyName: policy.name,
+          reason: message.slice(0, 300),
+        });
+      }
+      throw new ApiError(422, "BACKUP_FAILED", message.slice(0, 300));
     }
+
+    const job = await prisma.backup_jobs.findUniqueOrThrow({ where: { id: result.jobId }, include: INCLUDE });
+
+    // 手动备份成功后同样执行保留清理：否则「每天自动跑」才瘦身，
+    // 而频繁手动备份的机器磁盘只增不减——正是这个缺口最初被发现的场景。
+    let retention = null;
+    if (result.status !== "failed" && body.policyId) {
+      try {
+        retention = await applyRetention({
+          organizationId: session.organization.id,
+          policyId: body.policyId,
+          actorId: session.user.id,
+        });
+      } catch (error) {
+        console.error("[backup] 手动备份后的保留清理失败", { policyId: body.policyId, error });
+      }
+    }
+
+    // 手动路径同样清扫暂存目录：频繁手点「立即备份」的机器不会跑定时调度，
+    // 孤儿与过期失败文件只能靠这里清。
+    let stagingSweep = null;
+    try {
+      stagingSweep = await sweepStagingFiles({ organizationId: session.organization.id, actorId: session.user.id });
+    } catch (error) {
+      console.error("[backup] 手动备份后的暂存清扫失败", { error });
+    }
+
+    return okResponse({ ...result, job: jobDto(job), retention, stagingSweep }, requestId, { status: 201 });
   });
 }

@@ -81,6 +81,22 @@ export const config = {
   /** 备份落盘根目录（Local 暂存区，同时也是「必需目标」之一）。 */
   backupLocalDir: process.env.BACKUP_LOCAL_DIR ?? ".backups",
   /**
+   * 公开 API 的对外基址（开发者文档站里写给集成方看的那一个）。
+   *
+   * 为什么必须显式配置而不是从 `APP_BASE_URL` 推导：`APP_BASE_URL` 是
+   * **后台控制台的**地址（本机是 `http://127.0.0.1:3100`，只监听回环），
+   * 而集成方需要的是「从公网能打到的 HTTPS 域名 + /api/v1」。
+   * 早先文档站直接写 `<LICENSE_API_DOMAIN>` 占位符，集成方拿到文档后
+   * 还得回来问「到底填什么」，等于文档没写完。
+   *
+   * 默认值刻意留空而不是猜一个域名：猜错会让人对着一个不存在的地址调试，
+   * 比明说「未配置」更难排查。`publicApiBaseUrlOrNull()` 为 null 时，
+   * 文档页会显式渲染「未配置」提示，而不是编一个看起来像真的地址。
+   */
+  publicApiBaseUrl: readOptionalEnv("PUBLIC_API_BASE_URL"),
+  /** 沙箱对外基址。与生产分开配置，防止把测试流量打到生产域名。 */
+  sandboxApiBaseUrl: readOptionalEnv("PUBLIC_SANDBOX_API_BASE_URL"),
+  /**
    * 开发环境的“邮件出口”：密码重置链接直接返回给前端展示。
    * 生产必须设置 DEV_MAIL_SINK=false，否则重置链接会泄露给调用方。
    */

@@ -2,7 +2,7 @@
 # 签名私钥离线恢复材料（规格 24 Go-Live Gate：远端校验通过、解密私钥在服务器外安全保存）。
 #
 # 产出（默认落在 /root/授权saas-offsite，0700）：
-#   1. keys-<UTC>.tar.gz.enc   —— .keys 与 .keys-sandbox 的加密归档（AES-256-CBC + PBKDF2）
+#   1. keys-<UTC>.tar.gz.enc   —— .keys / .keys-prod / .keys-sandbox 的加密归档（AES-256-CBC + PBKDF2）
 #   2. signing-keys-<UTC>.sql  —— 只含元数据（kid / 指纹 / 状态 / 有效期），**不含私钥**
 #   3. MANIFEST-<UTC>.txt      —— 归档与明文的 sha256、成员清单、恢复步骤
 #
@@ -40,13 +40,30 @@ else
   echo "==> 复用已有归档口令：$PASS_FILE"
 fi
 
-# 只打包真正存在且非空的密钥目录；沙箱没跑过就不进归档。
+# 只打包真正存在且非空的密钥目录；某个环境没跑过就不进归档。
+#
+# 三个目录都要覆盖，缺一个就是灾难：
+#   .keys           —— 开发默认（SIGNING_KEY_DIR 未设置时）
+#   .keys-prod      —— 生产实例，**必须归档**：漏掉它等于灾备拿不到生产签名私钥
+#   .keys-sandbox   —— 沙箱实例
+# 历史上这里漏了 .keys-prod，因为本机 .keys 与 .keys-prod 内容恰好逐字节相同
+# （12 个文件 sha256 全等）才没暴露；换一台机器生成的生产私钥就补不回来了。
+KEY_DIR_CANDIDATES=(.keys .keys-prod .keys-sandbox)
 DIRS=()
-[ -d .keys ] && [ -n "$(ls -A .keys 2>/dev/null)" ] && DIRS+=(.keys)
-[ -d .keys-sandbox ] && [ -n "$(ls -A .keys-sandbox 2>/dev/null)" ] && DIRS+=(.keys-sandbox)
+for dir in "${KEY_DIR_CANDIDATES[@]}"; do
+  [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ] && DIRS+=("$dir")
+done
 if [ ${#DIRS[@]} -eq 0 ]; then
-  echo "没有可归档的密钥目录（.keys / .keys-sandbox）" >&2
+  echo "没有可归档的密钥目录（${KEY_DIR_CANDIDATES[*]}）" >&2
   exit 1
+fi
+
+# 生产目录存在却没进归档，说明路径判断写错了 —— 宁可失败也不要静默漏归档。
+if [ -d .keys-prod ] && [ -n "$(ls -A .keys-prod 2>/dev/null)" ]; then
+  case " ${DIRS[*]} " in
+    *" .keys-prod "*) ;;
+    *) echo "内部错误：.keys-prod 存在但未加入归档清单" >&2; exit 1 ;;
+  esac
 fi
 
 echo "==> 归档目录：${DIRS[*]}"
@@ -109,7 +126,9 @@ ARCHIVE_SHA="$(sha256sum "$ARCHIVE" | awk '{print $1}')"
   echo "[恢复步骤]"
   echo "  1. openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in <归档> -out keys.tar.gz -pass file:<口令文件>"
   echo "  2. tar -xzf keys.tar.gz -C /root/授权saas"
-  echo "  3. chmod 700 .keys && chmod 600 .keys/* 2>/dev/null; chmod 600 .keys/credentials/* 2>/dev/null"
+  for dir in "${DIRS[@]}"; do
+    echo "     chmod 700 ${dir} && chmod 600 ${dir}/* 2>/dev/null; chmod 600 ${dir}/credentials/* 2>/dev/null"
+  done
   echo "  4. 对照 signing-keys-*.sql 校验每个 private_key_ref 都存在"
   echo "  5. systemctl restart licensing-saas && curl /api/v1/status"
   echo

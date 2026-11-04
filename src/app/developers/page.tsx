@@ -1,10 +1,25 @@
 import Link from "next/link";
+import { connection } from "next/server";
 import { ArrowRight, KeyRound, ShieldCheck, Webhook, Gauge } from "lucide-react";
 import { DocsSection } from "@/components/developers/endpoint";
 import { DocsHeader } from "@/components/developers/docs-shell";
 import { CodeBlock } from "@/components/developers/code-block";
 import { DOCS_SECTIONS, MACHINE_READABLE_FILES } from "@/lib/developers/docs-nav";
 import { WEBHOOK_EVENT_TYPES } from "@/lib/services/webhook-events";
+import {
+  PUBLIC_API_ENV,
+  PUBLIC_SANDBOX_ENV,
+  displayBaseUrl,
+  readPublicBaseUrls,
+} from "@/lib/developers/base-urls";
+
+/**
+ * 这几个页面必须按请求渲染：基础地址来自运行实例的环境变量（`PUBLIC_API_BASE_URL` /
+ * `PUBLIC_SANDBOX_API_BASE_URL`），构建机上没有这些值。`cacheComponents` 下
+ * `connection()` 会让路由变成阻塞式，需要显式 `instant = false` 才能构建通过。
+ */
+export const instant = false;
+
 
 const HIGHLIGHTS = [
   {
@@ -29,7 +44,13 @@ const HIGHLIGHTS = [
   },
 ];
 
-export default function DevelopersIndexPage() {
+export default async function DevelopersIndexPage() {
+  // 首页是集成方看到的第一个地址，写占位符等于让他们回来问「填什么」。
+  await connection();
+  const urls = readPublicBaseUrls();
+  const productionBase = displayBaseUrl(urls.production, PUBLIC_API_ENV);
+  const sandboxBase = displayBaseUrl(urls.sandbox, PUBLIC_SANDBOX_ENV);
+
   return (
     <>
       <DocsHeader
@@ -119,8 +140,8 @@ export default function DevelopersIndexPage() {
         <CodeBlock
           language="text"
           filename="Base URL"
-          code={`Production  https://<LICENSE_API_DOMAIN>/api/v1
-Sandbox     https://<LICENSE_SANDBOX_DOMAIN>/api/v1   ← 开发期一律用这个`}
+          code={`Production  ${productionBase}
+Sandbox     ${sandboxBase}   ← 开发期一律用这个`}
         />
         <p>
           Sandbox 与生产使用不同的数据库、不同的签名密钥、不同的产品凭证。任何写死生产域名、

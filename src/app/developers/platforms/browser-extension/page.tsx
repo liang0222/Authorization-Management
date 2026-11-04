@@ -1,11 +1,26 @@
 import type { Metadata } from "next";
+import { connection } from "next/server";
 import { DocsHeader } from "@/components/developers/docs-shell";
 import { DocsSection } from "@/components/developers/endpoint";
 import { CodeBlock } from "@/components/developers/code-block";
+import { PUBLIC_API_ENV, originOf, readPublicBaseUrls } from "@/lib/developers/base-urls";
+
+/**
+ * 这几个页面必须按请求渲染：基础地址来自运行实例的环境变量（`PUBLIC_API_BASE_URL` /
+ * `PUBLIC_SANDBOX_API_BASE_URL`），构建机上没有这些值。`cacheComponents` 下
+ * `connection()` 会让路由变成阻塞式，需要显式 `instant = false` 才能构建通过。
+ */
+export const instant = false;
+
 
 export const metadata: Metadata = { title: "浏览器扩展" };
 
-export default function BrowserExtensionPage() {
+export default async function BrowserExtensionPage() {
+  // host_permissions 必须写真实 origin：占位符会让扩展装上后所有请求被浏览器拦掉，
+  // 而报错信息只说「权限不足」，排查成本很高。域名来自运行实例配置。
+  await connection();
+  const productionOrigin = originOf(readPublicBaseUrls().production, PUBLIC_API_ENV);
+
   return (
     <>
       <DocsHeader
@@ -28,7 +43,7 @@ export default function BrowserExtensionPage() {
           code={`{
   "manifest_version": 3,
   "background": { "service_worker": "background.js", "type": "module" },
-  "host_permissions": ["https://<LICENSE_API_DOMAIN>/*"],
+  "host_permissions": ["${productionOrigin}/*"],
   "permissions": ["storage"]
 }`}
         />

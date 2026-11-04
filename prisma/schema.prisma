@@ -182,6 +182,8 @@ model backup_jobs {
   error_message        String?
   created_by           String?                @db.Uuid
   created_at           DateTime               @default(now()) @db.Timestamptz(6)
+  /// 保留策略清掉该作业备份文件的时间。作业记录本身永久保留（审计凭据），只清文件。
+  purged_at            DateTime?              @db.Timestamptz(6)
   backup_job_targets   backup_job_targets[]
   users                users?                 @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
   organizations        organizations          @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)

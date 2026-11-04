@@ -6,6 +6,7 @@ import { writeStagingFile, readStagingFile } from "./dump";
 import { createAdapter, type AdapterRow } from "./factory";
 import type { StorageAdapter } from "./types";
 import { writeAudit } from "@/lib/domain/audit";
+import { notifyBackupIssue } from "./alerts";
 
 /**
  * 备份作业编排（规格 16.11.3 的多目标策略就在 `decideJobStatus` 里）。
@@ -130,6 +131,22 @@ export function decideJobStatus(
   return okCount >= need ? "partial" : "failed";
 }
 
+/**
+ * 判断一次上传失败是否值得重试。
+ *
+ * 只重试「链路抖动」这一类：超时、连接被重置、DNS 临时失败。
+ * 明确的服务端拒绝（401/403/404/405/校验和不符）重试只会重复失败，
+ * 还会把作业拖到超时，所以一律不重试。
+ */
+export function isTransientUploadError(message: string): boolean {
+  return /aborted due to timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EPIPE|EAI_AGAIN|socket hang up|fetch failed/i.test(
+    message,
+  );
+}
+
+/** 上传尝试次数上限（含首次）。1 次重试 = 对偶发抖动够用，又不至于把作业拖长到失控。 */
+export const UPLOAD_ATTEMPTS = 2;
+
 async function uploadToTarget(
   jobId: string,
   organizationId: string,
@@ -161,41 +178,69 @@ async function uploadToTarget(
 
   const remotePath = backupObjectKey(plan.row.remote_prefix, backupId);
 
-  try {
-    const put = await adapter.put(remotePath, body);
-    await prisma.backup_job_targets.update({
-      where: { id: target.id },
-      data: {
-        status: "verifying",
-        remote_uri: put.remoteUri,
-        remote_size_bytes: BigInt(put.sizeBytes),
-        checksum_sha256: sha256,
-        uploaded_at: new Date(),
-      },
-    });
+  // 上传 + 回读校验。链路抖动（超时、连接重置）值得再试一次：
+  // 2026-11-04 03:00 那次定时备份就是公网 WebDAV 单目标超时，另外四个目标全 verified。
+  // 重试次数写死 2，不做指数退避——作业本身有 30 分钟总超时，退避在这里收益不大。
+  for (let attempt = 1; attempt <= UPLOAD_ATTEMPTS; attempt += 1) {
+    try {
+      const put = await adapter.put(remotePath, body);
+      await prisma.backup_job_targets.update({
+        where: { id: target.id },
+        data: {
+          status: "verifying",
+          remote_uri: put.remoteUri,
+          remote_size_bytes: BigInt(put.sizeBytes),
+          checksum_sha256: sha256,
+          uploaded_at: new Date(),
+        },
+      });
 
-    // 下载回来自己算一遍：远端声明的 checksum 不可信，只有自己算的才算。
-    const fetched = await adapter.get(remotePath);
-    const actual = sha256Hex(fetched.body);
-    const verified = actual === sha256;
-    await prisma.backup_job_targets.update({
-      where: { id: target.id },
-      data: {
-        status: verified ? "verified" : "failed",
-        verified_at: verified ? new Date() : null,
-        error_code: verified ? null : "CHECKSUM_MISMATCH",
-        error_message: verified ? null : `远端 SHA-256 为 ${actual}`,
-      },
-    });
-    return { ok: verified, error: verified ? null : "远端内容与本地不一致" };
-  } catch (error) {
-    const message = (error as Error).message;
-    await prisma.backup_job_targets.update({
-      where: { id: target.id },
-      data: { status: "failed", error_code: "UPLOAD_FAILED", error_message: message.slice(0, 400), retry_count: { increment: 1 } },
-    });
-    return { ok: false, error: message };
+      // 下载回来自己算一遍：远端声明的 checksum 不可信，只有自己算的才算。
+      const fetched = await adapter.get(remotePath);
+      const actual = sha256Hex(fetched.body);
+      const verified = actual === sha256;
+      await prisma.backup_job_targets.update({
+        where: { id: target.id },
+        data: {
+          status: verified ? "verified" : "failed",
+          verified_at: verified ? new Date() : null,
+          error_code: verified ? null : "CHECKSUM_MISMATCH",
+          error_message: verified ? null : `远端 SHA-256 为 ${actual}`,
+        },
+      });
+      return { ok: verified, error: verified ? null : "远端内容与本地不一致" };
+    } catch (error) {
+      const message = (error as Error).message;
+      const lastAttempt = attempt >= UPLOAD_ATTEMPTS;
+      const retryable = isTransientUploadError(message);
+      if (!retryable || lastAttempt) {
+        await prisma.backup_job_targets.update({
+          where: { id: target.id },
+          data: {
+            status: "failed",
+            error_code: "UPLOAD_FAILED",
+            error_message: message.slice(0, 400),
+            retry_count: { increment: 1 },
+          },
+        });
+        return { ok: false, error: message };
+      }
+      // 记一次重试，但状态留在 uploading：此刻既不是失败也不是完成。
+      await prisma.backup_job_targets.update({
+        where: { id: target.id },
+        data: { retry_count: { increment: 1 } },
+      });
+      console.warn("[backup] 上传失败，准备重试", {
+        backupId,
+        destination: plan.name,
+        attempt,
+        error: message,
+      });
+    }
   }
+
+  // 循环必然在内部 return，这里只是让类型收窄。
+  return { ok: false, error: "上传重试耗尽" };
 }
 
 export async function runBackup(input: RunBackupInput): Promise<RunBackupResult> {
@@ -272,6 +317,27 @@ export async function runBackup(input: RunBackupInput): Promise<RunBackupResult>
       after: { backup_id: backupId, status, size_bytes: staging.sizeBytes, targets: plans.length },
     });
 
+    // 告警放在编排层而不是各个调用点：手动「立即备份」、定时调度、单目标重传
+    // 三条入口都会经过这里，漏掉任何一条就等于「这条路径的失败没人知道」。
+    // 之前只有 scheduler 里调了 notifyBackupIssue，从后台点「立即备份」失败时
+    // 只弹一个 422，审计里一行记录都没有。
+    if (status === "failed" || status === "partial" || status === "degraded") {
+      const failedTargets = targetResults.filter((item) => item.status === "failed");
+      await notifyBackupIssue({
+        organizationId: input.organizationId,
+        status,
+        backupId,
+        jobId: job.id,
+        policyName: policy?.name ?? null,
+        errorCode: status === "failed" ? "BACKUP_FAILED" : "BACKUP_PARTIAL",
+        errorMessage:
+          failedTargets.length > 0
+            ? failedTargets.map((item) => `${item.name}: ${item.error ?? "未知错误"}`).join("; ")
+            : null,
+        failedTargets: failedTargets.map((item) => item.name),
+      });
+    }
+
     return { jobId: job.id, backupId, status, sizeBytes: staging.sizeBytes, manifestSha256: encrypted.sha256, targets: targetResults };
   } catch (error) {
     const message = (error as Error).message;
@@ -280,6 +346,17 @@ export async function runBackup(input: RunBackupInput): Promise<RunBackupResult>
     await prisma.backup_jobs.update({
       where: { id: job.id },
       data: { status: "failed", finished_at: new Date(), error_code: "BACKUP_FAILED", error_message: message.slice(0, 400) },
+    });
+    // 抛错这条路径最需要告警：pg_dump 挂了、磁盘满了、加密失败都在这里，
+    // 而调用方只拿到一句 message，没有任何人会被通知到。
+    await notifyBackupIssue({
+      organizationId: input.organizationId,
+      status: "failed",
+      backupId,
+      jobId: job.id,
+      policyName: policy?.name ?? null,
+      errorCode: "BACKUP_FAILED",
+      errorMessage: message.slice(0, 400),
     });
     throw error;
   }

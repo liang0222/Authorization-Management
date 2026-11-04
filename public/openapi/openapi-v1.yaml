@@ -7,7 +7,9 @@ info:
     这份文档是**运行时公开 API**的契约，由代码生成后再人工核对，
     每一条 path 都对应仓库里真实存在的 route handler，并由 `tests/contract/openapi.test.ts` 校验。
 
-    - **Base URL**：`https://<LICENSE_API_DOMAIN>/api/v1`（Sandbox：`https://<LICENSE_SANDBOX_DOMAIN>/api/v1`）
+    - **Base URL**：见下方 `servers`（Production / Sandbox 各一条）。从本实例
+      `/developers/openapi.yaml` 下载时，`servers[].variables.domain.default` 已被替换成本实例的真实域名，
+      可直接使用；仓库里的文件保持模板形态，便于同一份包部署到任何域名。
     - **认证**：客户端用 `X-Client-ID`（公开标识，不是密码）+ 设备私钥签名；
       服务端到服务端用 `private_key_jwt` 断言。
     - **错误**：按稳定 `code` 分支，不要匹配 `message` 文案。

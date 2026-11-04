@@ -150,6 +150,8 @@ export function jobDto(
     sizeBytes: row.size_bytes === null ? null : Number(row.size_bytes),
     manifestSha256: row.manifest_sha256,
     hasLocalStaging: Boolean(row.local_path),
+    /** 保留策略清掉该备份文件的时间；非空表示文件已删、作业记录仍在（审计凭据）。 */
+    purgedAt: row.purged_at,
     errorCode: row.error_code,
     errorMessage: row.error_message,
     createdBy: row.users?.display_name ?? null,

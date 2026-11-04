@@ -19,6 +19,22 @@ export interface WebDavOptions {
 
 const PROBE_FILE = "ziming-connectivity-probe.txt";
 
+/**
+ * 控制类请求（MKCOL / DELETE / PROPFIND 级）的超时：30 秒足够。
+ */
+const CONTROL_TIMEOUT_MS = 30_000;
+
+/**
+ * 传输类请求（PUT / GET 整个备份体）的超时。
+ *
+ * 为什么不能和上面共用 30 秒：备份体是 300 KB 量级，但链路可能只有几百 KB/s，
+ * 跨公网的 WebDAV 更容易卡在慢速上行。2026-11-04 03:00 那次定时备份就是
+ * `offsite-webdav-remote` 单目标 `UPLOAD_FAILED: The operation was aborted due to timeout`，
+ * 另外四个目标全 verified —— 也就是说不是数据问题，是 30 秒这个预算对公网链路太紧。
+ * 放宽到 5 分钟；真的断网时 `AbortSignal` 仍会兜住，不会无限挂。
+ */
+const TRANSFER_TIMEOUT_MS = 300_000;
+
 export class WebDavAdapter implements StorageAdapter {
   readonly kind = "webdav";
 
@@ -57,12 +73,13 @@ export class WebDavAdapter implements StorageAdapter {
     remotePath: string,
     body?: Buffer,
     extraHeaders: Record<string, string> = {},
+    timeoutMs: number = CONTROL_TIMEOUT_MS,
   ): Promise<Response> {
     const response = await fetch(this.urlFor(remotePath), {
       method,
       headers: { authorization: this.authHeader(), ...extraHeaders },
       body: body ? new Uint8Array(body) : undefined,
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(timeoutMs),
       // 不跟随重定向：跳到别的主机等于把备份送给了别人。
       redirect: "manual",
     });
@@ -136,7 +153,13 @@ export class WebDavAdapter implements StorageAdapter {
     // ensureDirectory 内部经 request() -> urlFor() 已经补了 root_path 前缀，
     // 这里传相对路径即可，再拼一次 prefix 会得到 /upload/upload/... 
     if (parent) await this.ensureDirectory(parent);
-    const response = await this.request("PUT", remotePath, body, { "content-type": "application/octet-stream" });
+    const response = await this.request(
+      "PUT",
+      remotePath,
+      body,
+      { "content-type": "application/octet-stream" },
+      TRANSFER_TIMEOUT_MS,
+    );
     if (response.status >= 300) {
       throw new BackupAdapterError("WEBDAV_PUT_FAILED", `上传失败：HTTP ${response.status}`, response.status >= 500);
     }
@@ -144,7 +167,7 @@ export class WebDavAdapter implements StorageAdapter {
   }
 
   async get(remotePath: string): Promise<FetchResult> {
-    const response = await this.request("GET", remotePath);
+    const response = await this.request("GET", remotePath, undefined, {}, TRANSFER_TIMEOUT_MS);
     if (response.status === 404) {
       throw new BackupAdapterError("WEBDAV_NOT_FOUND", "远端文件不存在");
     }

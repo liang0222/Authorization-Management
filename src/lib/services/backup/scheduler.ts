@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { matchesCron, parseCron } from "@/lib/domain/cron";
 import { runBackup } from "@/lib/services/backup/runner";
 import { notifyBackupConfigIssue, notifyBackupIssue, checkLocalBackupDisk } from "@/lib/services/backup/alerts";
+import { applyRetention, sweepStagingFiles } from "@/lib/services/backup/retention";
 
 /**
  * 备份调度器（规格 16.11.3）。
@@ -14,8 +15,9 @@ import { notifyBackupConfigIssue, notifyBackupIssue, checkLocalBackupDisk } from
  *   命中后先查数据库是否已有同策略同分钟起的作业，避免 tick 重复触发。
  * - **跨实例互斥**：用 PostgreSQL 咨询锁 `pg_try_advisory_lock`，
  *   拿不到锁说明别的实例正在跑同一策略，直接跳过。进程崩溃时锁随连接释放，不会粘住。
- * - **失败告警**：作业结束后按状态发告警（见 alerts.ts），
+ * - **失败告警**：由 `runBackup` 按最终状态统一发（见 alerts.ts），
  *   `failed` 一定告警，`partial`/`degraded` 也告警——「主存储挂了、备存储顶上」必须让人知道。
+ *   本模块只负责「调度器自身出错」（超时、锁异常、cron 脏数据）这一类的告警。
  * - **磁盘检查**：本地暂存区剩余空间低于阈值时告警，避免备份把自己的磁盘写满。
  */
 
@@ -113,25 +115,46 @@ async function runPolicy(
       ),
     ]);
 
-    const failedTargets = result.targets.filter((t) => t.status === "failed").map((t) => t.name);
-    const bad = result.status === "failed" || result.status === "partial" || result.status === "degraded";
-    if (bad) {
-      await notifyBackupIssue({
-        organizationId: policy.organization_id,
-        status: result.status,
-        backupId: result.backupId,
-        jobId: result.jobId,
-        policyName: policy.name,
-        errorCode: result.status === "failed" ? "BACKUP_FAILED" : "BACKUP_PARTIAL",
-        errorMessage: failedTargets.length > 0
-          ? result.targets.filter((t) => t.status === "failed").map((t) => `${t.name}: ${t.error ?? "未知错误"}`).join("; ")
-          : null,
-        failedTargets,
-      });
-    }
+    // 失败告警不在这里发：runBackup 内部已经按最终状态统一告警，
+    // 手动触发、定时触发、单目标重传三条入口共用同一份判定，
+    // 在这里再发一次只会让同一次失败出现两条审计。
     console.log(
       `[backup] policy=${policy.name} backup=${result.backupId} status=${result.status} targets=${result.targets.length}`,
     );
+
+    // 保留清理跟在每次成功（含 partial/degraded）之后跑：
+    // 先有新的可用备份，再删旧的，顺序反了会出现「旧的删了、新的还没成」的空窗。
+    // 清理失败绝不影响备份结果——它只是磁盘治理，不该把一次成功的备份变成失败。
+    if (result.status !== "failed") {
+      try {
+        const retention = await applyRetention({
+          organizationId: policy.organization_id,
+          policyId: policy.id,
+          actorId: null,
+        });
+        if (retention.purged > 0 || retention.failed > 0) {
+          console.log(
+            `[backup] retention policy=${policy.name} evaluated=${retention.evaluated} kept=${retention.kept} purged=${retention.purged} failed=${retention.failed}`,
+          );
+        }
+      } catch (error) {
+        console.error("[backup] 保留清理失败", { policy: policy.name, error });
+      }
+    }
+
+    // 暂存目录清扫：保留策略只看得到「挂在策略上且成功过」的作业，
+    // 孤儿文件与过期失败作业的 `.zmbk` 需要单独扫。放在每次备份之后跑，
+    // 保证频率跟得上产生速度（一天一次足够，不必单独开定时器）。
+    try {
+      const sweep = await sweepStagingFiles({ organizationId: policy.organization_id, actorId: null });
+      if (sweep.deleted > 0) {
+        console.log(
+          `[backup] staging sweep scanned=${sweep.scanned} deleted=${sweep.deleted} kept=${sweep.kept} freed=${sweep.bytesFreed}`,
+        );
+      }
+    } catch (error) {
+      console.error("[backup] 暂存目录清扫失败", { policy: policy.name, error });
+    }
     return "ran";
   } finally {
     await prisma.$queryRaw`SELECT pg_advisory_unlock(${key}::bigint)`.catch(() => undefined);

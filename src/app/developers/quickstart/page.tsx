@@ -1,16 +1,38 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { connection } from "next/server";
+import {
+  PUBLIC_SANDBOX_ENV,
+  displayBaseUrl,
+  readPublicBaseUrls,
+} from "@/lib/developers/base-urls";
 import { DocsHeader } from "@/components/developers/docs-shell";
 import { DocsSection, ParamsTable } from "@/components/developers/endpoint";
 import { CodeBlock } from "@/components/developers/code-block";
 
+/**
+ * 这几个页面必须按请求渲染：基础地址来自运行实例的环境变量（`PUBLIC_API_BASE_URL` /
+ * `PUBLIC_SANDBOX_API_BASE_URL`），构建机上没有这些值。`cacheComponents` 下
+ * `connection()` 会让路由变成阻塞式，需要显式 `instant = false` 才能构建通过。
+ */
+export const instant = false;
+
+
 export const metadata: Metadata = { title: "快速开始" };
 
-const PYTHON = `import base64, json, os, urllib.request
+/**
+ * 示例脚本按实例的沙箱基址生成。
+ *
+ * 以前这里写死 `https://<LICENSE_SANDBOX_DOMAIN>/api/v1`：复制粘贴这段代码的人
+ * 必须先回来问「域名填什么」。现在直接把本实例配置的地址填进去，仍是
+ * `os.environ.get(..., 默认值)` 形态，换环境用环境变量覆盖即可。
+ */
+function pythonScript(sandboxBase: string): string {
+  return `import base64, json, os, urllib.request
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
 
-BASE = os.environ.get("LICENSE_BASE_URL", "https://<LICENSE_SANDBOX_DOMAIN>/api/v1")
+BASE = os.environ.get("LICENSE_BASE_URL", "${sandboxBase}")
 CLIENT_ID = os.environ["LICENSE_CLIENT_ID"]      # X-Client-ID：公开标识，不是密钥
 PRODUCT_ID = os.environ["LICENSE_PRODUCT_ID"]
 LICENSE_KEY = os.environ["LICENSE_KEY"]          # 只在首次激活时用一次
@@ -87,8 +109,14 @@ heartbeat = call(
 )["data"]
 print("心跳:", heartbeat["effective_status"], "下次心跳(秒):", heartbeat["next_heartbeat_seconds"])
 `;
+}
 
-export default function QuickstartPage() {
+export default async function QuickstartPage() {
+  // 基础地址来自运行实例的环境变量，构建机上没有 → 必须等到请求到达再读。
+  await connection();
+  const urls = readPublicBaseUrls();
+  const sandboxBase = displayBaseUrl(urls.sandbox, PUBLIC_SANDBOX_ENV);
+
   return (
     <>
       <DocsHeader
@@ -116,7 +144,7 @@ export default function QuickstartPage() {
       </DocsSection>
 
       <DocsSection title="完整脚本（Python 3.9+）">
-        <CodeBlock filename="quickstart.py" language="python" code={PYTHON} />
+        <CodeBlock filename="quickstart.py" language="python" code={pythonScript(sandboxBase)} />
         <p>
           唯一依赖：<code className="font-mono text-[12.5px]">pip install cryptography</code>。运行前设置
           <code className="font-mono text-[12.5px]"> LICENSE_BASE_URL</code>、
