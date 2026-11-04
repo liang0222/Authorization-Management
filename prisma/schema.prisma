@@ -8,6 +8,22 @@ datasource db {
   provider = "postgresql"
 }
 
+/// Universal Installer 的安装记录。与本地安装锁（/var/lib/universal-installer/<id>/installed.lock）
+/// 共同校验安装状态：锁被删了但这里有行 → 判定为已安装并告警，绝不允许重装。
+model installer_records {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  project_id        String   @unique @db.VarChar(80)
+  project_version   String   @db.VarChar(40)
+  installer_version String   @db.VarChar(40)
+  adapter           String   @db.VarChar(80)
+  manifest_sha256   String   @db.VarChar(64)
+  installed_at      DateTime @default(now()) @db.Timestamptz(6)
+  installed_by      String?  @db.VarChar(254)
+  /// 安装尝试 id，可与安装器日志里的 attempt 对上
+  attempt_id        String?  @db.VarChar(80)
+  detail            Json     @default("{}")
+}
+
 model activation_challenges {
   id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   organization_id    String    @db.Uuid
