@@ -168,26 +168,37 @@ rmdir /root/licensing-saas
 
 本机实测产物：
 
-| 包 | 体积 | 文件数 | 说明 |
+| 包 | 体积 | 文件数 | sha256 |
 | --- | --- | --- | --- |
-| `licensing-saas-v1.5.0.tar.gz` | 7,648,033 B（7.3 MB） | 379 | 保留文件权限位 |
-| `licensing-saas-v1.5.0.zip` | 7,892,757 B（7.6 MB） | 379 | mode 存在元数据里，但 python 解压会丢 |
+| `licensing-saas-v1.5.0.tar.gz` | 7,669,760 B（7.3 MB） | 384 | `500ba59e56c68370340a668ddce19c1522008bfbd7795ef5387e20f05a710e3e` |
+| `licensing-saas-v1.5.0.zip` | 7,923,366 B（7.6 MB） | 384 | `151f6f726df484ac6c0f87f633f546f39e6e614d1a427c4c5510fa2024783346` |
 
-两者解压后逐文件 sha256 比对 **379/379 完全一致**，差异为 0。
+两者解压后逐文件 sha256 比对 **384/384 完全一致**，差异为 0；`tar.gz` 保留两个脚本的 `0755` 可执行位，`zip` 的 mode 存在元数据里（用 python 解压会丢，需要 `chmod +x scripts/*.sh` 补回）。
+
+> 文件数说明：`git ls-files` 是 394 条，其中 10 条是 `.windsurf/skills/*` 的符号链接（指向 `.agents/skills/`，属本机开发环境配置，且 git 里存的是链接路径而不是内容），打包时按「只收普通文件、跳过符号链接」处理，所以实际入包 384 个。
 
 **打包后的自检（打之前跑一遍，别把密钥打出去）**：
 
 ```bash
 python3 - <<'PY'
-import zipfile, tarfile
-z = {n[len('licensing-saas/'):] for n in zipfile.ZipFile('/root/dist/licensing-saas-v1.5.0.zip').namelist() if not n.endswith('/')}
-t = {m.name[len('授权saas/'):] for m in tarfile.open('/root/dist/licensing-saas-v1.5.0.tar.gz').getmembers() if m.isfile()}
-print("只在 zip:", sorted(z-t), "| 只在 tar:", sorted(t-z))
+import zipfile, tarfile, hashlib
+zp, tg = '/root/dist/licensing-saas-v1.5.0.zip', '/root/dist/licensing-saas-v1.5.0.tar.gz'
+zf = zipfile.ZipFile(zp)
+z = {n[len('licensing-saas/'):]: zf.read(n) for n in zf.namelist() if not n.endswith('/')}
+with tarfile.open(tg) as tf:
+    t = {m.name[len('licensing-saas/'):]: tf.extractfile(m).read() for m in tf.getmembers() if m.isfile()}
+
+print("zip:", len(z), "tar:", len(t))
+print("只在 zip:", sorted(set(z)-set(t)), "| 只在 tar:", sorted(set(t)-set(z)))
+print("内容不一致:", [k for k in z if k in t and hashlib.sha256(z[k]).hexdigest() != hashlib.sha256(t[k]).hexdigest()])
 print("含真 .env:", any(n in t for n in ('.env','.env.local','.env.production')))
-print("含密钥目录:", any(n.startswith(('.keys','.backups')) for n in t))
-print("含 node_modules:", any(n.startswith('node_modules') for n in t))
+print("含密钥/备份目录:", [n for n in t if n.startswith(('.keys','.backups'))])
+print("含 node_modules/.next:", any(n.startswith(('node_modules','.next')) for n in t))
+print("可执行位:", [(m.name, oct(m.mode)) for m in tarfile.open(tg).getmembers() if m.isfile() and m.mode & 0o111])
 PY
-# 期望：只在 zip: [] | 只在 tar: [] / False / False / False
+# 期望：zip: 384 tar: 384 / 只在 zip: [] | 只在 tar: [] / 内容不一致: []
+#      含真 .env: False / 含密钥/备份目录: [] / 含 node_modules/.next: False
+#      可执行位只有 scripts/offsite-key-backup.sh 与 scripts/sandbox-bootstrap.sh 两个 0o755
 ```
 
 **为什么只打 git 跟踪的文件是对的**：本机 `git ls-files` 里 **0 条** 命中 `.env`/`.keys`/`.backups`（`.gitignore` 已经把它们排掉了），而 `.env.example` 在跟踪列表里（模板必须带）。实测两个包的敏感命中都只有 `.env.example` 这一条，是真需要带的模板。
