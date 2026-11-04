@@ -122,7 +122,7 @@ rsync -avz --exclude node_modules --exclude .next --exclude .backups \
 ```bash
 # 源机器：先看要打多少
 cd /root/授权saas
-git ls-files | wc -l          # 本机 389
+git ls-files | wc -l          # 本机 399（含 10 个符号链接，实际入包 389）
 git ls-files -z | xargs -0 du -ch | tail -1   # 本机 11M
 
 # 打 zip（本机无 zip 命令，用 python 标准库）
@@ -170,12 +170,14 @@ rmdir /root/licensing-saas
 
 | 包 | 体积（约） | 文件数 | 说明 |
 | --- | --- | --- | --- |
-| `licensing-saas-v1.5.0.tar.gz` | 7.4 MB | 387 | 保留 `scripts/*.sh` 的 `0755` 可执行位 |
-| `licensing-saas-v1.5.0.zip` | 7.7 MB | 387 | mode 存在元数据里，python 解压会丢，需 `chmod +x scripts/*.sh` |
+| `licensing-saas-v1.5.0.tar.gz` | 7.4 MB | 389 | 保留 `scripts/*.sh` 的 `0755` 可执行位 |
+| `licensing-saas-v1.5.0.zip` | 7.7 MB | 389 | mode 存在元数据里，python 解压会丢，需 `chmod +x scripts/*.sh` |
+
+包内 `scripts/` 下三个 `.sh` 带 `0755`：`offsite-key-backup.sh`、`sandbox-bootstrap.sh`、`deploy-bootstrap.sh`。
 
 > **体积、文件数与 sha256 都随内容变化，不要抄这里的数字。** 每次打完包以命令输出的 `sha256=` 为准（上面的打包脚本会打印）。文档只保证一条结构性质：**两包逐文件字节完全一致**。
 
-文件数 = `git ls-files` 减去所有符号链接。当前是 397 − 10 = **387**；那 10 条是 `.windsurf/skills/*`（指向 `.agents/skills/`，属本机开发环境配置，git 里存的是链接路径而不是内容）。打包按「只收普通文件、跳过符号链接」处理，所以数字会随仓库新增文件变化，**以脚本实际统计为准**。
+文件数 = `git ls-files` 减去所有符号链接。当前是 399 − 10 = **389**；那 10 条是 `.windsurf/skills/*`（指向 `.agents/skills/`，属本机开发环境配置，git 里存的是链接路径而不是内容）。打包按「只收普通文件、跳过符号链接」处理，所以数字会随仓库新增文件变化，**以脚本实际统计为准**。
 
 **打包后的自检（打之前跑一遍，别把密钥打出去）**：
 
