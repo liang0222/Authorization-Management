@@ -1,4 +1,5 @@
 import { config, productionSafetyIssues } from "@/lib/config";
+import { backgroundWorkersAllowed, startBackgroundWorkers } from "@/lib/background";
 
 /**
  * 服务端启动钩子。
@@ -15,15 +16,6 @@ import { config, productionSafetyIssues } from "@/lib/config";
  * - `globalThis` 上打标记，避免 dev 模式热重载反复启动多个定时器。
  * - 单实例内串行执行；多实例靠数据库的 `FOR UPDATE SKIP LOCKED` 天然互斥。
  */
-
-/** 同一进程内只允许启动一次同名后台任务。 */
-function once(name: string): boolean {
-  const key = `__ziming_worker_${name}__`;
-  const globalRef = globalThis as unknown as Record<string, boolean | undefined>;
-  if (globalRef[key]) return false;
-  globalRef[key] = true;
-  return true;
-}
 
 /**
  * 启动前的配置校验。返回问题列表，空数组表示通过。
@@ -67,13 +59,20 @@ export async function register() {
     );
   }
 
-  if (process.env.DISABLE_WEBHOOK_WORKER !== "true" && once("webhook")) {
-    const { startWebhookWorker } = await import("@/lib/services/webhook-dispatcher");
-    startWebhookWorker();
+  /**
+   * 后台任务要等装完再起。
+   *
+   * 全新实例上这两条循环一启动就会查 `webhook_deliveries` / `backup_policies`，
+   * 而那时表还没建（安装器要等用户提交表单才跑迁移），于是每 5 秒往日志里刷一条
+   * `TableDoesNotExist`。日志里混着这种「预期内的报错」，真出问题时反而看不见。
+   *
+   * 判定只看安装锁文件（纯 fs，不连库）：装完 `finalize` 会写锁，
+   * 随后 `/api/install/run` 的成功分支会调用 `startBackgroundWorkers()` 补起。
+   */
+  if (!backgroundWorkersAllowed()) {
+    console.log("[boot] 尚未安装，跳过后台任务（安装完成后自动启动）");
+    return;
   }
 
-  if (process.env.DISABLE_BACKUP_SCHEDULER !== "true" && once("backup-scheduler")) {
-    const { startBackupScheduler } = await import("@/lib/services/backup/scheduler");
-    startBackupScheduler();
-  }
+  await startBackgroundWorkers();
 }

@@ -8,6 +8,7 @@
  *
  * 返回的是完整 attempt（每一步的 status / 耗时 / 结论），前端据此渲染进度与失败定位。
  */
+import { startBackgroundWorkers } from "@/lib/background";
 import { NextResponse } from "next/server";
 import { connection } from "next/server";
 import { canRunInstall, describeState } from "@/lib/installer/state";
@@ -94,6 +95,14 @@ export async function POST(req: Request) {
 
     invalidateInstallGate();
     invalidateEnvironment();
+
+    /**
+     * 启动期后台任务是被跳过的（那时表还不存在）。装完之后在这里补起，
+     * 用户不需要为「让 webhook 投递器活过来」再重启一次服务。
+     */
+    if (result.ok) {
+      await startBackgroundWorkers();
+    }
 
     return NextResponse.json(
       envelope(
