@@ -535,7 +535,7 @@ RATE_LIMITED: 请求过于频繁，请在 15 秒后重试
 | `src/components/app/page-header.tsx` | `Section` 增加 `id` + `scroll-mt-20` | 个人设置页的 `#security` 锚点 |
 | `src/app/app/layout.tsx` | 不用 Suspense 包 AppShell | 保住页面的 instant-navigation 校验 |
 | `src/app/app/products/page.tsx` / `customers/page.tsx` | 列表加 `onRowClick` 整行进详情 | 与授权/设备列表交互一致 |
-| `docs/shots/` | **v1.5.0 公开发布前已移除**（截图含真实客户名与登录页口令） | 交付要能肉眼核验，但不能靠泄露生产数据来核验；现在请按 README 的本地启动步骤自己跑自己截 |
+| `docs/shots/` | 已重建（31 张，全部基于虚构种子数据） | 早期截图含真实客户名，公开发布前移除；现用虚构数据重截，可随仓库分发，见 [`docs/shots/README.md`](shots/README.md) |
 | `src/lib/http/api.ts` | `ERROR_STATUS` 由 `Record<string, number>` 改为字面量对象 + `as const`，并导出 `ErrorCode` | 宽类型让 `keyof` 退化成 `string`，完整性检查全失效（见 4.28） |
 | `src/lib/services/rate-limit-store.ts` | 限流表移到 `src/lib/domain/public-rate-limits.ts` 并 re-export | 只想读数值的读者（llms 生成器、契约测试）不该被迫拖起 Prisma |
 | `src/lib/services/webhook-events.ts` | 先写 `WEBHOOK_EVENT_TYPES` 数组，类型由数组推导 | 反过来先写 union 再手抄数组必然分裂 |

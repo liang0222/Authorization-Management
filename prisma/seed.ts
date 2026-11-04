@@ -306,7 +306,7 @@ async function main() {
         client_id: CLIENT_IDS.miniapp,
         secret_hash: createHash("sha256").update("seed-secret-not-usable").digest(),
         scopes: ["server:check", "server:assign", "entitlements:read"],
-        allowed_origins: ["https://api.xinglan.dev"],
+        allowed_origins: ["https://api.demo.example"],
         last_used_at: hoursAgo(5),
         public_key: miniappPublicKey,
       },
@@ -319,7 +319,7 @@ async function main() {
         client_id: CLIENT_IDS.gateway,
         secret_hash: createHash("sha256").update("seed-secret-not-usable-2").digest(),
         scopes: ["server:check", "offline:grant", "entitlements:read"],
-        allowed_origins: ["https://gateway.xinglan.dev"],
+        allowed_origins: ["https://gateway.demo.example"],
         last_used_at: daysAgo(2),
         public_key: gatewayPublicKey,
       },
@@ -506,7 +506,7 @@ async function main() {
   ];
 
   const customers = [];
-  for (const def of customerDefs) {
+  for (const [index, def] of customerDefs.entries()) {
     customers.push(
       await prisma.customers.create({
         data: {
@@ -515,7 +515,9 @@ async function main() {
           company_name: def.company,
           email: def.email,
           customer_code: def.code,
-          phone: `1${Math.floor(3 + Math.random() * 6)}${Math.floor(100000000 + Math.random() * 899999999)}`,
+          // 演示号码固定成 138-0000-00NN，不用随机数：随机出来的 11 位数字
+          // 有可能正好是某个真人的手机号，而这个仓库和它的截图要能公开分发。
+          phone: `1380000${String(index + 1).padStart(4, "0")}`,
           notes: def.company ? null : "个人开发者，按年订阅",
         },
       }),
@@ -745,7 +747,7 @@ async function main() {
   }
 
   // ---------------------------------------------------------------- Webhook
-  const hookHost = (label: string) => `https://hooks.xinglan.dev/${label}`;
+  const hookHost = (label: string) => `https://hooks.demo.example/${label}`;
   const hooks = await Promise.all([
     prisma.webhook_endpoints.create({
       data: {
@@ -882,7 +884,7 @@ async function main() {
   console.log(
     `种子数据完成：1 个组织、${products.length} 个产品、${customers.length} 个客户、${createdLicenses.length} 份授权、3 个 Webhook 端点。`,
   );
-  console.log("登录账号：owner@xinglan.dev / License#2026（所有者），ops@xinglan.dev（运营），audit@xinglan.dev（只读）");
+  console.log("登录账号：owner@xinglan.dev / License#2026（所有者），ops@xinglan.dev（运营），audit@xinglan.dev（只读）；Webhook 回调地址用 hooks.demo.example（RFC 2606 保留域，不会真发出）");
 }
 
 main()

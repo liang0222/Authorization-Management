@@ -556,7 +556,7 @@ Java（`Files.createDirectories`）与 C#（`Directory.CreateDirectory`）本来
 | 交互验收清单与测试结果 | 本文件第 6 节（15.10 逐条）+ 第 1–4 节（测试结果） |
 | VibeHub 安装/使用记录 | [`vibehub-terminology.md`](./vibehub-terminology.md) 第 1、4 节 |
 
-**截图**：v1.5.0 公开发布前已移除 `docs/shots/`——那些页面截图里含真实客户名称与登录页明文口令，与本次 `prisma/seed.ts` 改为虚构数据的清理目标冲突。需要看图请在本机按下面的步骤自己跑一遍，截自己的数据。原目录共 31 张（生产构建 + 种子数据，桌面与移动端）：
+**截图**：共 31 张，已随仓库提供（[`docs/shots/`](shots/README.md)），全部基于虚构种子数据截取——v1.5.0 公开发布前曾因早期截图含真实客户名称而整目录移除，现用虚构数据重建后恢复：
 
 | 分组 | 文件 |
 | --- | --- |
@@ -564,11 +564,10 @@ Java（`Files.createDirectories`）与 C#（`Directory.CreateDirectory`）本来
 | 业务配置 | `products.png`、`product-detail.png`、`customers.png`、`customer-detail.png`、`plans.png`、`features.png`、`devices.png` |
 | 开发者中心 | `developer-api.png`、`developer-credentials.png`、`developer-webhooks.png` |
 | 安全与系统 | `signing-keys.png`、`verification-logs.png`、`audit-logs.png`、`settings-members.png`、`settings-organization.png`、`settings-system.png`、`settings-profile.png` |
-| 备份与灾备（v1.5） | `backups.png`（整页）、`backups-top.png`（首屏）、`backups-readonly.png`（只读账号视角） |
+| 备份与灾备（v1.5） | `backups.png`（整页）、`backups-top.png`（首屏）、`backups-readonly.png`（只读账号视角：写操作按钮全部禁用） |
 | 移动端（390×844） | `mobile-dashboard.png`、`mobile-licenses.png`、`mobile-backups.png` |
 
-重新生成：启动 3001 生产服务后，用 Playwright 登录 `owner@xinglan.dev` 逐页
-`page.screenshot()`；详情页靠 `page.locator("tbody tr").first().click()` 进入。
+重新生成：见 [`docs/shots/README.md`](shots/README.md) 的三步说明（隔离库 + 虚构 seed + Playwright）。
 
 ---
 
