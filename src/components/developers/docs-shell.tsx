@@ -17,6 +17,12 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const { prev, next } = neighbours(pathname);
+  /**
+   * 在线 OpenAPI 浏览页要占满正文区：Scalar 是「目录 / 正文 / 示例」三栏布局，
+   * 塞进 `max-w-3xl`（768px）后示例栏会被挤成一条缝，代码块只能横向滚动。
+   * 其余页面仍是阅读型内容，保持 768px 的行宽上限。
+   */
+  const wide = pathname === "/developers/openapi";
 
   const nav = (
     <nav className="space-y-6">
@@ -90,9 +96,11 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
       </header>
 
       <div className="mx-auto flex w-full max-w-7xl flex-1 gap-10 px-4 py-8 sm:px-6">
-        <aside className="hidden w-60 shrink-0 lg:block">
-          <div className="sticky top-20 max-h-[calc(100svh-6rem)] overflow-y-auto pb-8">{nav}</div>
-        </aside>
+        {wide ? null : (
+          <aside className="hidden w-60 shrink-0 lg:block">
+            <div className="sticky top-20 max-h-[calc(100svh-6rem)] overflow-y-auto pb-8">{nav}</div>
+          </aside>
+        )}
 
         {open ? (
           <div className="fixed inset-0 top-14 z-30 bg-background/95 p-4 lg:hidden">
@@ -101,9 +109,14 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
         ) : null}
 
         <main className="min-w-0 flex-1">
-          <article className="max-w-3xl">{children}</article>
+          <article className={wide ? "max-w-none" : "max-w-3xl"}>{children}</article>
 
-          <div className="mt-12 flex max-w-3xl flex-col gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
+          <div
+            className={cn(
+              "mt-12 flex flex-col gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between",
+              wide ? "max-w-none" : "max-w-3xl",
+            )}
+          >
             {prev ? (
               <Link
                 href={prev.href}

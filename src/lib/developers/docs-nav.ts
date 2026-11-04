@@ -30,6 +30,7 @@ export const DOCS_SECTIONS: DocsNavSection[] = [
     items: [
       { title: "认证", href: "/developers/authentication", description: "四种客户端各自的认证方式" },
       { title: "API 参考", href: "/developers/api-reference", description: "公开端点逐条说明（数量由契约现算）" },
+      { title: "在线 API 浏览", href: "/developers/openapi", description: "Scalar 渲染的 OpenAPI 3.1 文档，可搜索、可看示例" },
       { title: "SDK 与示例", href: "/developers/sdks", description: "Python / PHP / Node 可运行示例" },
     ],
   },

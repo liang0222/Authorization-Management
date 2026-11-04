@@ -65,3 +65,6 @@ next-env.d.ts
 # Python 示例运行残留
 __pycache__/
 *.pyc
+
+# Scalar standalone 构建产物（构建前由 scripts/copy-api-reference.mjs 从 node_modules 复制）
+/public/vendor/scalar-standalone.js

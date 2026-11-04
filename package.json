@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "node scripts/copy-api-reference.mjs && next build",
     "start": "next start",
     "lint": "eslint",
     "lint:openapi": "node scripts/openapi-lint.mjs",
@@ -21,6 +21,7 @@
   "dependencies": {
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",
+    "@scalar/api-reference": "^1.76.4",
     "class-variance-authority": "^0.7.1",
     "cmdk": "^1.1.1",
     "cn": "^0.5.1",
