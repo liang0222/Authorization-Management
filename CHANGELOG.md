@@ -16,6 +16,7 @@ Release Note、commit、迁移 ID 与回滚方式。
   右侧示例，Ctrl-K 搜索，界面中文）。数据源是同源 `/developers/openapi.yaml`，页面上的 Base URL 就是本实例
   真实域名。构建时由 `scripts/copy-api-reference.mjs` 把 IIFE 版脚本复制到 `public/vendor/`（不进 git）。
   按 27.2 关闭了交互式请求按钮（`hideTestRequestButton`）。文档侧栏新增「在线 API 浏览」入口。
+- 新增 `/openapi` → `/developers/openapi` 的 307 临时跳转，方便外部按最直白的路径命中在线文档。
 
 ## [1.5.0] - 2026-11-03
 

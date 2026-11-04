@@ -944,6 +944,14 @@ curl -s -o /dev/null -w "%{http_code} %{content_type}" https://<你的域名>/ve
 
 浏览器打开 `https://<你的域名>/developers/openapi`，应看到「子铭 Licensing API」标题、左侧端点目录、右上「下载 OpenAPI 文档」。
 
+短路径 `/openapi` 会 307 跳到 `/developers/openapi`（临时重定向，不进缓存），
+外部按最直白的路径猜地址时也能命中：
+
+```bash
+curl -s -o /dev/null -w "%{http_code} -> %{redirect_url}\n" https://<你的域名>/openapi
+# 307 -> https://<你的域名>/developers/openapi
+```
+
 **两个坑**（改动前先读）：
 
 - 必须用 IIFE 版 `standalone.js`，不能用 `standalone.esm.js`：ESM 版把 231 个组件拆成 `./chunks/*.js` 相对路径动态导入，单独复制一个文件到 `public/vendor/` 后那些 chunk 全部 404，页面只剩空白。
