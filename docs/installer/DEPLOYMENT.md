@@ -42,6 +42,17 @@ volumes:
 | `INSTALLER_DATA_DIR` | 否 | `/var/lib/universal-installer` | 安装状态根目录 |
 | `INSTALLER_ENV_FILE` | 否 | `/etc/licensing-saas/production.env` | 安装器写运行配置的目标 |
 | `INSTALLER_CSRF_SECRET` | 否 | 回退 `SESSION_SECRET`，再回退 `csrf.key` 文件 | CSRF 签名密钥 |
+| `DISABLE_WEBHOOK_WORKER` | 否 | — | 设 `true` 关掉 webhook 投递器 |
+| `DISABLE_BACKUP_SCHEDULER` | 否 | — | 设 `true` 关掉备份调度器 |
+
+### 后台任务的启动时机
+
+webhook 投递器与备份调度器**只在装完之后才启动**：`src/lib/background.ts` 的 `backgroundWorkersAllowed()` 查安装锁文件（纯 fs，不连库）。
+
+- 未装：启动日志打印 `[boot] 尚未安装，跳过后台任务（安装完成后自动启动）`，不起循环
+- 装完：`/api/install/run` 的成功分支调 `startBackgroundWorkers()` 补起，**不用重启服务**
+
+理由：全新实例在用户提交表单前数据库里一张表都没有，循环一跑就每 5 秒刷 `TableDoesNotExist`，真出问题时反而看不见。
 
 ---
 

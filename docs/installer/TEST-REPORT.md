@@ -370,7 +370,7 @@ reason = 数据库存在安装记录但本地安装锁缺失（疑似被删除�
 
 ---
 
-## 缺陷汇总（本轮修的 6 个）
+## 缺陷汇总（本轮修的 7 个）
 
 | # | 缺陷 | 暴露场景 | 严重度 |
 | --- | --- | --- | --- |
@@ -380,6 +380,33 @@ reason = 数据库存在安装记录但本地安装锁缺失（疑似被删除�
 | 4 | `FAILED → INSTALLING` 非法状态转移 | 场景 7b | P0 |
 | 5 | 权限判定查数据库级而非 schema 级 | 场景 7c | P1 |
 | 6 | 迁移报错不可读（Prisma `DbError` 结构体） | 场景 7d | P2 |
+| 7 | 未安装时后台任务刷 `TableDoesNotExist` | 干净包部署 | P1 |
+
+---
+
+## 补充场景 · 干净包上的完整部署
+
+除了在开发目录里跑，还把 `licensing-saas-v1.5.0.zip` 解到 `/tmp/pkgv2/licensing-saas`（全新目录、无 `node_modules`、无 `.next`、无 `.keys`），走一遍真实部署：
+
+| 步骤 | 命令 | 结果 |
+| --- | --- | --- |
+| 装依赖 | `npm ci --no-audit --no-fund` | 通过（只有 `ssh2` / `vue-demi` 的 install-scripts 警告） |
+| Prisma | `npx prisma --version` | `7.10.1`（不是 8.0.0-rc） |
+| 生成客户端 | `npx prisma generate` | `✔ Generated Prisma Client (7.10.1) in 577ms` |
+| 构建 | `npm run build` | `✓ Compiled successfully in 10.8s` + `106/106` |
+| 单测 | `npx vitest run tests/unit` | 22 files / 302 tests passed |
+| 起服务 | `next start -p 3197` | `GET /` → **307 `/install`**，`state=UNINSTALLED` |
+| 安装 | `POST /api/install/run` | **14 步全绿**，3.1s |
+| 库内 | — | `tables=42 permissions=35 roles=4 role_permissions=107 users=1 installer_records=1 migrations=9` |
+| 登录 | 用安装时创建的管理员 | HTTP 200，`lic_session` 43 字符 / `lic_csrf` 32 字符 |
+| 签名 | 用包里代码真签一次 | `kid=sk_20261104_3d7fecbe861c61b8 签名长度=64 验签=true` |
+| 私钥落盘 | — | `.keys-pkgv2/` 目录 `drwx------`，文件 `-rw-------` 119B |
+| 重装 | 再 POST 一次 | `409 INSTALL_LOCKED` |
+
+**这一步发现了第 7 个缺陷**：安装完成前，`instrumentation.ts` 一启动就拉起 webhook 投递器与备份调度器，而那时表还不存在，每 5 秒刷一条 `TableDoesNotExist`（装完前日志 24 条错误）。
+
+修法见 `src/lib/background.ts`：启动期先判安装锁文件，未装则跳过后台任务；`/api/install/run` 成功后补起。
+修后实测：未装实例启动日志 `[boot] 尚未安装，跳过后台任务（安装完成后自动启动）`，等 15s 错误 **0**；装完自动出现 `[webhook] dispatcher started` / `[backup] scheduler started`，再等 26s 错误仍 **0**。
 
 ---
 

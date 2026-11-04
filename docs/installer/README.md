@@ -11,7 +11,7 @@
 | [PHASE1-AUDIT.md](./PHASE1-AUDIT.md) | 项目审计：现有能力、缺口清单、不能碰的东西 | 想知道"为什么要做"的人 |
 | [PHASE2-ARCHITECTURE.md](./PHASE2-ARCHITECTURE.md) | 四层架构、Installer Contract、状态机、五级判定、安全设计 | 要改安装器的人 |
 | [INTEGRATION.md](./INTEGRATION.md) | 接一个新项目：写 Manifest + 实现 9 个方法 | 接其他技术栈的人 |
-| [TEST-REPORT.md](./TEST-REPORT.md) | Phase 7 的 16 类场景实测结果 + 6 个缺陷修复记录 | 想验证"真能跑"的人 |
+| [TEST-REPORT.md](./TEST-REPORT.md) | Phase 7 的 16 类场景 + 干净包部署实测 + 7 个缺陷修复记录 | 想验证"真能跑"的人 |
 | [DEPLOYMENT.md](./DEPLOYMENT.md) | 数据目录、环境变量、权限、备份、升级、排障 | 要部署的人 |
 
 ---
