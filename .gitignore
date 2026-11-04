@@ -68,3 +68,6 @@ __pycache__/
 
 # Scalar standalone 构建产物（构建前由 scripts/copy-api-reference.mjs 从 node_modules 复制）
 /public/vendor/scalar-standalone.js
+
+# Playwright 登录态（真实会话 cookie，由 tests/e2e/auth.setup.ts 现场生成，绝不能入库）
+/tests/e2e/.auth/
