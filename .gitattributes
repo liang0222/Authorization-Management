@@ -1,0 +1,31 @@
+# 跨平台协作的统一换行与文本判定
+#
+# 不设这个文件时，Windows 上 `git clone` 会按 core.autocrlf 把 .ts/.sh 转成 CRLF：
+#   - shell 脚本带 CRLF 会在 Linux 上直接 `bad interpreter: /bin/bash^M`
+#   - Prisma 迁移 SQL 带 CRLF 虽不报错，但 diff 噪声大
+# 所以这里强制：所有文本按 LF 存、按 LF 检出；二进制文件不做任何转换与 diff。
+
+* text=auto eol=lf
+
+# 二进制：禁止换行转换，禁止文本 diff（否则会看到一堆乱码）
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.webp   binary
+*.ico    binary
+*.woff   binary
+*.woff2  binary
+*.ttf    binary
+*.zip    binary
+*.gz     binary
+*.tgz    binary
+*.pdf    binary
+
+# 构建产物与锁文件的 diff 噪音控制
+package-lock.json  -diff linguist-generated
+*.min.js           -diff linguist-generated
+*.min.css          -diff linguist-generated
+
+# 供 GitHub 语言统计排除（避免把文档里的 JS 片段算成代码）
+docs/**            linguist-documentation

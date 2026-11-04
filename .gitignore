@@ -55,6 +55,8 @@ next-env.d.ts
 # 会话工具目录（DSH / Claude 本地状态）
 /.dsh-uploads/
 /.agents/
+# IDE 技能软链目录（内容依赖各自的 agent 环境，不随仓库分发）
+/.windsurf/
 /.claude/
 
 # 测试产物

@@ -485,21 +485,24 @@ async function main() {
   }
 
   // ---------------------------------------------------------------- 客户
+  // 演示客户：全部为虚构主体（规格要求 seed 不得包含真实客户信息，
+  // 这个文件要能公开分发）。company 与 email 域名的 .example 一致，
+  // 都是 RFC 2606 保留域名，永远不会真的解析或收信。
   const customerDefs = [
-    { name: "示例客户 01", company: "示例客户 01 有限公司", email: "ops@yunqi.example", code: "C-1001" },
-    { name: "示例客户 02", company: "示例客户 02 有限公司", email: "it@pqsj.example", code: "C-1002" },
-    { name: "示例客户 03", company: "示例客户 03信息技术有限公司", email: "admin@zkzs.example", code: "C-1003" },
-    { name: "示例客户 04", company: "示例客户 04 有限公司", email: "liu@lantu.example", code: "C-1004" },
-    { name: "示例客户 05", company: "示例客户 05 服务中心", email: "wang@tfy.example", code: "C-1005" },
-    { name: "示例客户 06", company: "示例客户 06 有限公司", email: "zhao@nslog.example", code: "C-1006" },
-    { name: "示例客户 07", company: "示例客户 07 园区", email: "chen@ggsoft.example", code: "C-1007" },
-    { name: "示例客户 08", company: "示例客户 08 有限公司", email: "sun@silu.example", code: "C-1008" },
-    { name: "示例客户 09", company: "示例客户 09 有限公司", email: "zhang@hldz.example", code: "C-1009" },
-    { name: "示例客户 10", company: "示例客户 10 平台", email: "xu@szgyy.example", code: "C-1010" },
-    { name: "示例客户 11", company: "示例客户 11 有限公司", email: "lin@ldxx.example", code: "C-1011" },
-    { name: "示例客户 12", company: "示例客户 12 研究院", email: "he@csimr.example", code: "C-1012" },
-    { name: "个人开发者 · 示例甲", company: null, email: "lihang@dev.example", code: null },
-    { name: "个人开发者 · 示例乙", company: null, email: "zhaomin@dev.example", code: null },
+    { name: "示例客户 01", company: "示例客户 01 有限公司", email: "ops@customer01.example", code: "C-1001" },
+    { name: "示例客户 02", company: "示例客户 02 有限公司", email: "it@customer02.example", code: "C-1002" },
+    { name: "示例客户 03", company: "示例客户 03 信息技术有限公司", email: "admin@customer03.example", code: "C-1003" },
+    { name: "示例客户 04", company: "示例客户 04 设备有限公司", email: "ops@customer04.example", code: "C-1004" },
+    { name: "示例客户 05", company: "示例客户 05 服务中心", email: "it@customer05.example", code: "C-1005" },
+    { name: "示例客户 06", company: "示例客户 06 物流有限公司", email: "ops@customer06.example", code: "C-1006" },
+    { name: "示例客户 07", company: "示例客户 07 软件园", email: "it@customer07.example", code: "C-1007" },
+    { name: "示例客户 08", company: "示例客户 08 科技有限公司", email: "ops@customer08.example", code: "C-1008" },
+    { name: "示例客户 09", company: "示例客户 09 电子有限公司", email: "it@customer09.example", code: "C-1009" },
+    { name: "示例客户 10", company: "示例客户 10 平台", email: "ops@customer10.example", code: "C-1010" },
+    { name: "示例客户 11", company: "示例客户 11 信息技术有限公司", email: "it@customer11.example", code: "C-1011" },
+    { name: "示例客户 12", company: "示例客户 12 研究院", email: "ops@customer12.example", code: "C-1012" },
+    { name: "个人开发者 · 示例甲", company: null, email: "dev-a@example.com", code: null },
+    { name: "个人开发者 · 示例乙", company: null, email: "dev-b@example.com", code: null },
   ];
 
   const customers = [];

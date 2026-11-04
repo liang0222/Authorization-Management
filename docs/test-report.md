@@ -556,7 +556,7 @@ Java（`Files.createDirectories`）与 C#（`Directory.CreateDirectory`）本来
 | 交互验收清单与测试结果 | 本文件第 6 节（15.10 逐条）+ 第 1–4 节（测试结果） |
 | VibeHub 安装/使用记录 | [`vibehub-terminology.md`](./vibehub-terminology.md) 第 1、4 节 |
 
-**截图**：`docs/shots/` 下 27 张，全部来自生产构建 + 种子数据的真实页面，不是设计稿：
+**截图**：v1.5.0 公开发布前已移除 `docs/shots/`——那些页面截图里含真实客户名称与登录页明文口令，与本次 `prisma/seed.ts` 改为虚构数据的清理目标冲突。需要看图请在本机按下面的步骤自己跑一遍，截自己的数据。原目录共 31 张（生产构建 + 种子数据，桌面与移动端）：
 
 | 分组 | 文件 |
 | --- | --- |

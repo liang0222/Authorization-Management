@@ -249,7 +249,7 @@ docs/                         交付文档（见下）
 | [`docs/test-report.md`](docs/test-report.md) | 测试结果、15.10 十二条验收、15.11 交付清单、未覆盖项 |
 | [`docs/handoff.md`](docs/handoff.md) | 已完成/待办、快速恢复、踩坑清单 |
 | [`docs/vibehub-terminology.md`](docs/vibehub-terminology.md) | VibeHub 安装记录、20+ 术语对照（带真实内链）、术语如何改变实现 |
-| [`docs/shots/`](docs/shots) | 29 张真实页面截图（生产构建 + 种子数据，桌面与移动端） |
+| `docs/shots/` | ~~页面截图~~ —— 公开发布前已移除（截图含真实客户名称与登录页口令）。本地跑起来自己截 |
 
 ---
 

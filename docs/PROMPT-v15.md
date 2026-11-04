@@ -140,7 +140,7 @@ enable 并 start，**监听 `127.0.0.1:[PORT]`**（不要占用 `[RESERVED_PORTS
 | `[FORBIDDEN_PATHS_OR_SERVICES]` | `/root/.dsh`、`dsh-web.service` | 不可动 |
 | `[DOMAIN]` | `<你的域名>` | 域名 |
 | `[CERT_DIR]` | `/root/<你的域名>_ecc` | 证书目录 |
-| `[PROVIDER]` / `[ENDPOINT]` / `[BK_USER]` / `[BK_PASS]` / `[BK_PATH]` | `webdav` / `http://[OFFSITE_HOST]:5244/dav` / `admin` / `[BK_PASS]` / `/film` | 异地备份 |
+| `[PROVIDER]` / `[ENDPOINT]` / `[BK_USER]` / `[BK_PASS]` / `[BK_PATH]` | `webdav` / `http://[OFFSITE_HOST]:5244/dav` / 你自己的账号 / 你自己的密码 / `/film` | 异地备份 |
 
 ---
 

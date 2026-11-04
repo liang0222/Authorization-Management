@@ -122,7 +122,7 @@ rsync -avz --exclude node_modules --exclude .next --exclude .backups \
 ```bash
 # 源机器：先看要打多少
 cd /root/授权saas
-git ls-files | wc -l          # 本机 399（含 10 个符号链接，实际入包 389）
+git ls-files | wc -l          # 本机 390
 git ls-files -z | xargs -0 du -ch | tail -1   # 本机 11M
 
 # 打 zip（本机无 zip 命令，用 python 标准库）
@@ -170,14 +170,14 @@ rmdir /root/licensing-saas
 
 | 包 | 体积（约） | 文件数 | 说明 |
 | --- | --- | --- | --- |
-| `licensing-saas-v1.5.0.tar.gz` | 7.4 MB | 389 | 保留 `scripts/*.sh` 的 `0755` 可执行位 |
-| `licensing-saas-v1.5.0.zip` | 7.7 MB | 389 | mode 存在元数据里，python 解压会丢，需 `chmod +x scripts/*.sh` |
+| `licensing-saas-v1.5.0.tar.gz` | 约 7.4 MB | 390 | 保留 `scripts/*.sh` 的 `0755` 可执行位 |
+| `licensing-saas-v1.5.0.zip` | 约 7.7 MB | 390 | mode 存在元数据里，python 解压会丢，需 `chmod +x scripts/*.sh` |
 
 包内 `scripts/` 下三个 `.sh` 带 `0755`：`offsite-key-backup.sh`、`sandbox-bootstrap.sh`、`deploy-bootstrap.sh`。
 
 > **体积、文件数与 sha256 都随内容变化，不要抄这里的数字。** 每次打完包以命令输出的 `sha256=` 为准（上面的打包脚本会打印）。文档只保证一条结构性质：**两包逐文件字节完全一致**。
 
-文件数 = `git ls-files` 减去所有符号链接。当前是 399 − 10 = **389**；那 10 条是 `.windsurf/skills/*`（指向 `.agents/skills/`，属本机开发环境配置，git 里存的是链接路径而不是内容）。打包按「只收普通文件、跳过符号链接」处理，所以数字会随仓库新增文件变化，**以脚本实际统计为准**。
+文件数 = `git ls-files` **减去所有符号链接**（打包脚本对 `os.path.islink()` 判定为真的一律跳过）。当前仓库已经不含符号链接，所以两者相等：**390**。历史上曾有 10 条 `.windsurf/skills/*`（指向 `.agents/skills/`，属本机开发环境配置，clone 下来是断链），v1.5.0 公开发布前已删除并写入 `.gitignore`。数字会随仓库新增文件变化，**以脚本实际统计为准**。
 
 **打包后的自检（打之前跑一遍，别把密钥打出去）**：
 
@@ -222,7 +222,7 @@ mkdir -p .keys-prod && chmod 700 .keys-prod      # 见下方说明
 >
 > 补齐方式见 §4.4「恢复后必须补私钥」。
 
-> ⚠️ **`.windsurf/skills/*` 那 10 个符号链接不会进包**（`git ls-files` 里有，但 `os.path.islink()` 判断会跳过）。它们只是 IDE 的 skill 软链，指向 `.agents/skills/`，与本项目运行无关。少这 10 条不影响任何功能。
+> ℹ️ 仓库**已不再包含任何符号链接**。早期版本里 `.windsurf/skills/*` 有 10 条指向 `.agents/skills/` 的软链，clone 后会变成断链，已于公开发布前删除并加入 `.gitignore`。打包脚本仍保留「跳过符号链接」的逻辑，作为通用防护。
 
 > ⚠️ **不要同步 `node_modules` 和 `.next`**。本机这两个是 Node 24 下装/构建的，到 Node 26 上 ABI 不匹配、构建产物也不兼容。必须重装重建（包本来就排除了它们）。
 > ⚠️ **不要同步 `.keys-prod`**。签名私钥应该在新机器上重新生成，或者从离线备份恢复（见 §9.8）。复制私钥等于把签发能力复制一份。
@@ -982,7 +982,7 @@ echo "deployed $(date -u +%FT%TZ) src=$SRC fp=$A"
 
 沙箱实例（3101）要对外可用就得单独开站点、**单独签证书**。
 
-> ⚠️ **为什么必须单独签**：`<你的域名后缀>` 是泛解析，`随便一个不存在的子域.<你的域名后缀>` 都解析到本机。所以「DNS 能解析」完全不能证明子域可用，也不能指望泛域名证书覆盖——泛域名证书（`*.<你的域名后缀>`）是另一张证书、另一套 DNS-01 校验，跟这张无关。
+> ⚠️ **为什么必须单独签**：`<你的域名后缀>` 是泛解析，`随便一个不存在的子域` 都解析到本机。所以「DNS 能解析」完全不能证明子域可用，也不能指望泛域名证书覆盖——泛域名证书（`*.<你的域名后缀>`）是另一张证书、另一套 DNS-01 校验，跟这张无关。
 
 **第 1 步：先只开 80 端口**（ACME HTTP-01 需要）
 

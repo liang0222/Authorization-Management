@@ -176,7 +176,7 @@ describe("上传重试判定", () => {
       "The operation was aborted due to timeout",
       "read ETIMEDOUT",
       "read ECONNRESET",
-      "connect ECONNREFUSED [OFFSITE_HOST]:5244",
+      "connect ECONNREFUSED 203.0.113.20:5244",
       "write EPIPE",
       "getaddrinfo EAI_AGAIN",
       "socket hang up",

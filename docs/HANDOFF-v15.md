@@ -87,7 +87,7 @@ Restart=on-failure
 - 目标 id：`7caee0f8…9594` / `15e48268…eab3` / `e9cf8b34…938d` / `07f01316…5160` / `a662ac09…4d89`
 - 调度：`0 3 * * *` / `Asia/Shanghai` / `all_required` / `sha256_and_manifest` / 加密开
 - 保留：7 日 + 4 周 + 3 月
-- **外部目标的凭据**：`admin` / `[BK_PASS]`，`tlsVerify: false`（该端点无 TLS）
+- **外部目标的凭据**：`[BK_USER]` / `[BK_PASS]`，`tlsVerify: false`（该端点无 TLS）
 
 ---
 

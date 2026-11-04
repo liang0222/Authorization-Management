@@ -121,7 +121,7 @@
 | `POST /api/v1/admin/backups/jobs` 而不是 `/policies/{id}/run` | 🔁 按项目 | 本项目路由命名，换项目要查 |
 | `policyId` | 🔁 替换 | `969407cb-afe4-4087-89b3-a4d6d093ebaf` |
 | 目标 id（5 个） | 🔁 替换 | `7caee0f8…` / `15e48268…` / `e9cf8b34…` / `07f01316…` / `a662ac09…` |
-| 远端端点与凭据 | 🔁 替换 | `http://[OFFSITE_HOST]:5244/dav` / `admin` / `[BK_PASS]` / rootPath `/film` |
+| 远端端点与凭据 | 🔁 替换 | `http://[OFFSITE_HOST]:5244/dav` / `[BK_USER]` / `[BK_PASS]` / rootPath `/film` |
 | 加密信封格式 | 🔁 按项目 | 本项目 `ZMBK1 \| iv(12) \| tag(16) \| ciphertext`，key = `sha256(env值)` |
 | 解密脚本 | 🔁 按项目改 | `/tmp/offsite_decrypt.mjs`，抄 `src/lib/services/backup/crypto.ts` 的派生逻辑 |
 
@@ -146,7 +146,7 @@ PG 宿主端口   55432                   ← 不是 5432
 ```
 后台登录      owner@xinglan.dev / License#2026
 PG            licensing / licensing_dev_pw
-外部 WebDAV   admin / [BK_PASS]
+外部 WebDAV   [BK_USER] / [BK_PASS]
 ```
 
 **换项目时**：这些不在代码里，在用户脑子里或密码管理器里，**必须问**，不能猜。

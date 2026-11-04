@@ -13,7 +13,7 @@
     pip install cryptography
 
 环境变量：
-    LICENSE_BASE         默认 https://<你的域名>
+    LICENSE_BASE         默认 https://licensing.example.com
     LICENSE_CLIENT_ID    机密服务端凭证的 client_id（cs_ 开头）
     LICENSE_CREDENTIAL_ID 凭证 ID，作为 JWT header 的 kid
     LICENSE_ASSERTION_KEY 私钥文件路径（PKCS#8 DER 或 PEM，Ed25519）
@@ -36,7 +36,7 @@ import uuid
 
 from cryptography.hazmat.primitives import serialization
 
-BASE = os.environ.get("LICENSE_BASE", "https://<你的域名>").rstrip("/")
+BASE = os.environ.get("LICENSE_BASE", "https://licensing.example.com").rstrip("/")
 CLIENT_ID = os.environ.get("LICENSE_CLIENT_ID", "")
 CREDENTIAL_ID = os.environ.get("LICENSE_CREDENTIAL_ID", "")
 KEY_PATH = os.environ.get("LICENSE_ASSERTION_KEY", "")

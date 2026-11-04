@@ -152,14 +152,20 @@ function LoginForm() {
         </Button>
       </form>
 
-      <div className="rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-xs text-muted-foreground">
-        <p className="font-medium text-foreground">演示环境账号（种子数据）</p>
-        <ul className="mt-1 space-y-0.5">
-          <li>所有者：owner@xinglan.dev / License#2026</li>
-          <li>运营：ops@xinglan.dev / License#2026</li>
-          <li>只读：audit@xinglan.dev / License#2026</li>
-        </ul>
-      </div>
+      {/* 演示账号提示只在开发构建里出现。
+          NODE_ENV 在构建期被静态替换，production 构建会整块摇掉——
+          生产登录页不该把种子口令写在页面上，哪怕是 .example 域。
+          开发时 `npm run dev` 仍然能看到，方便本地起完直接登。 */}
+      {process.env.NODE_ENV !== "production" && (
+        <div className="rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-xs text-muted-foreground">
+          <p className="font-medium text-foreground">演示环境账号（种子数据）</p>
+          <ul className="mt-1 space-y-0.5">
+            <li>所有者：owner@xinglan.dev / License#2026</li>
+            <li>运营：ops@xinglan.dev / License#2026</li>
+            <li>只读：audit@xinglan.dev / License#2026</li>
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

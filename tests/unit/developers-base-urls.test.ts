@@ -19,8 +19,8 @@ import {
  */
 
 const CONFIGURED: PublicBaseUrls = {
-  production: "https://<你的域名>",
-  sandbox: "https://<你的沙箱域名>",
+  production: "https://licensing.example.com",
+  sandbox: "https://sandbox.licensing.example.com",
 };
 const EMPTY: PublicBaseUrls = { production: null, sandbox: null };
 
@@ -59,9 +59,9 @@ servers:
 
 describe("displayBaseUrl / hostOf / originOf", () => {
   it("已配置时原样输出", () => {
-    expect(displayBaseUrl(CONFIGURED.production, PUBLIC_API_ENV)).toBe("https://<你的域名>");
-    expect(hostOf(CONFIGURED.sandbox, PUBLIC_SANDBOX_ENV)).toBe("<你的沙箱域名>");
-    expect(originOf(CONFIGURED.production, PUBLIC_API_ENV)).toBe("https://<你的域名>");
+    expect(displayBaseUrl(CONFIGURED.production, PUBLIC_API_ENV)).toBe("https://licensing.example.com");
+    expect(hostOf(CONFIGURED.sandbox, PUBLIC_SANDBOX_ENV)).toBe("sandbox.licensing.example.com");
+    expect(originOf(CONFIGURED.production, PUBLIC_API_ENV)).toBe("https://licensing.example.com");
   });
 
   it("未配置时明说未配置并带上环境变量名，不编默认域名", () => {
@@ -86,8 +86,8 @@ describe("displayBaseUrl / hostOf / originOf", () => {
 describe("applyServerDomains", () => {
   it("按 description 分别替换 Production 与 Sandbox 的域名", () => {
     const patched = applyServerDomains(SPEC, CONFIGURED);
-    expect(patched.servers[0].variables?.domain?.default).toBe("<你的域名>");
-    expect(patched.servers[1].variables?.domain?.default).toBe("<你的沙箱域名>");
+    expect(patched.servers[0].variables?.domain?.default).toBe("licensing.example.com");
+    expect(patched.servers[1].variables?.domain?.default).toBe("sandbox.licensing.example.com");
   });
 
   it("未配置时保留模板默认值，不写入空串", () => {
@@ -119,8 +119,8 @@ describe("rewriteServerDomainsInYaml", () => {
   it("替换两处默认域名，且注释与排版原样保留", () => {
     const { text, replaced } = rewriteServerDomainsInYaml(YAML, CONFIGURED);
     expect(replaced).toBe(2);
-    expect(text).toContain("default: <你的域名>");
-    expect(text).toContain("default: <你的沙箱域名>");
+    expect(text).toContain("default: licensing.example.com");
+    expect(text).toContain("default: sandbox.licensing.example.com");
     expect(text).toContain("# 这两条注释必须原样保留");
     expect(text).not.toContain("license-api.example.com");
   });
