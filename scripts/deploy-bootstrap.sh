@@ -62,6 +62,7 @@ for arg in "$@"; do
     --bind=*)            BIND="${arg#*=}" ;;
     --env-file=*)        ENV_FILE="${arg#*=}"; ENV_DIR="$(dirname "$ENV_FILE")" ;;
     --service-name=*)    SERVICE_NAME="${arg#*=}" ;;
+    --pg-container=*)    PG_CONTAINER_OVERRIDE="${arg#*=}" ;;
     --force)             FORCE=1 ;;
     --non-interactive)   : ;;   # 脚本本来就不提问，保留这个参数只为兼容习惯
     -h|--help)           sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -149,23 +150,49 @@ chmod 700 "$PROJECT_DIR/$SIGNING_KEY_DIR"
 ok "密钥目录 $SIGNING_KEY_DIR 已就绪（0700）"
 
 # ───────────────────────────────────────────────────── 3. 数据库容器（可选）
+# 从 LICENSE_DB_URL 拆出 PG 连接信息，供容器与 psql/pg_restore 使用。
+# 不能硬编码：部署第二实例（沙箱）时硬编码会把数据灌进生产库。
+PG_USER="$(node -e "console.log(decodeURIComponent(new URL(process.env.LICENSE_DB_URL).username))" 2>/dev/null || true)"
+PG_PASS="$(node -e "console.log(decodeURIComponent(new URL(process.env.LICENSE_DB_URL).password))" 2>/dev/null || true)"
+PG_DB="$(node -e "const u=new URL(process.env.LICENSE_DB_URL);console.log(u.pathname.replace(/^\\//,''))" 2>/dev/null || true)"
+PG_HOST="$(node -e "console.log(new URL(process.env.LICENSE_DB_URL).hostname)" 2>/dev/null || true)"
+PG_PORT="$(node -e "const u=new URL(process.env.LICENSE_DB_URL);console.log(u.port||'5432')" 2>/dev/null || true)"
+[ -n "$PG_USER" ] && [ -n "$PG_DB" ] || die "无法从 LICENSE_DB_URL 解析出用户名/库名：$LICENSE_DB_URL"
+PG_CONTAINER="${PG_CONTAINER_OVERRIDE:-${PG_CONTAINER:-licensing-pg}}"
+say "目标库：${PG_USER}@${PG_HOST}:${PG_PORT}/${PG_DB}（容器 ${PG_CONTAINER}）"
+
+# 容器操作（起容器 / pg_restore）之前先确认「这个容器确实是 LICENSE_DB_URL 指的那台」。
+# 端口对不上就停下来说清楚 —— 否则最坏的可能是把 dump 灌进生产库。
+ensure_container_matches_url() {
+  docker inspect "$PG_CONTAINER" >/dev/null 2>&1 || \
+    die "容器 $PG_CONTAINER 不存在。要新建请加 --with-docker-pg；用别的容器请加 --pg-container=名字"
+  local mapped
+  mapped="$(docker inspect "$PG_CONTAINER" \
+    --format '{{range $p, $c := .NetworkSettings.Ports}}{{range $c}}{{.HostPort}} {{end}}{{end}}' 2>/dev/null | tr -s ' ')"
+  if [ -n "$mapped" ] && ! echo "$mapped" | grep -qw "$PG_PORT"; then
+    die "容器 $PG_CONTAINER 映射的宿主端口是 [$mapped]，但 LICENSE_DB_URL 指向 127.0.0.1:${PG_PORT}。
+      这两者不是同一个库。确认清楚再继续，别把数据灌进错的库。"
+  fi
+  ok "容器 $PG_CONTAINER 与 LICENSE_DB_URL 匹配（宿主端口 $PG_PORT）"
+}
+
 if [ "$WITH_DOCKER_PG" = "1" ]; then
   say "3/10 起 PostgreSQL 容器"
-  if docker ps -a --format '{{.Names}}' | grep -qx licensing-pg; then
-    docker start licensing-pg >/dev/null
-    ok "licensing-pg 已存在，已启动"
+  if docker ps -a --format '{{.Names}}' | grep -qx "$PG_CONTAINER"; then
+    docker start "$PG_CONTAINER" >/dev/null
+    ok "$PG_CONTAINER 已存在，已启动（用的是库里已有的数据卷，不会清空）"
   else
-    docker run -d --name licensing-pg --restart unless-stopped \
-      -p 127.0.0.1:55432:5432 \
-      -e POSTGRES_USER=licensing -e POSTGRES_PASSWORD=licensing_dev_pw -e POSTGRES_DB=licensing \
-      -v licensing-pgdata:/var/lib/postgresql/data postgres:16-alpine >/dev/null
-    ok "已创建 licensing-pg（只绑 127.0.0.1:55432）"
+    docker run -d --name "$PG_CONTAINER" --restart unless-stopped \
+      -p "127.0.0.1:${PG_PORT}:5432" \
+      -e POSTGRES_USER="$PG_USER" -e "POSTGRES_PASSWORD=$PG_PASS" -e "POSTGRES_DB=$PG_DB" \
+      -v "${PG_CONTAINER}-data:/var/lib/postgresql/data" postgres:16-alpine >/dev/null
+    ok "已创建 $PG_CONTAINER（只绑 127.0.0.1:${PG_PORT}）"
   fi
   for _ in $(seq 1 30); do
-    docker exec licensing-pg pg_isready -U licensing -d licensing >/dev/null 2>&1 && break
+    docker exec "$PG_CONTAINER" pg_isready -U "$PG_USER" -d "$PG_DB" >/dev/null 2>&1 && break
     sleep 1
   done
-  docker exec licensing-pg pg_isready -U licensing -d licensing >/dev/null || die "PG 30 秒内没就绪"
+  docker exec "$PG_CONTAINER" pg_isready -U "$PG_USER" -d "$PG_DB" >/dev/null || die "PG 30 秒内没就绪"
 else
   say "3/10 跳过数据库容器（要起请加 --with-docker-pg）"
 fi
@@ -175,12 +202,12 @@ if [ -n "$RESTORE_DUMP" ]; then
   say "4/10 恢复 dump：$RESTORE_DUMP"
   [ -f "$RESTORE_DUMP" ] || die "找不到 $RESTORE_DUMP"
   head -c 5 "$RESTORE_DUMP" | grep -q PGDMP || die "不是 custom format dump（前 5 字节应为 PGDMP）"
-  CONTAINER="${PG_CONTAINER:-licensing-pg}"
+  ensure_container_matches_url
   # 必须 docker cp：docker exec -i ... pg_restore < 宿主文件 会让容器读到 0 字节
-  docker cp "$RESTORE_DUMP" "$CONTAINER:/tmp/restore.dump"
-  docker exec "$CONTAINER" pg_restore -U licensing -d licensing \
+  docker cp "$RESTORE_DUMP" "$PG_CONTAINER:/tmp/restore.dump"
+  docker exec "$PG_CONTAINER" pg_restore -U "$PG_USER" -d "$PG_DB" \
     --clean --if-exists --no-owner /tmp/restore.dump || warn "pg_restore 有告警（--clean 时会忽略「对象不存在」）"
-  docker exec "$CONTAINER" rm -f /tmp/restore.dump
+  docker exec "$PG_CONTAINER" rm -f /tmp/restore.dump
   ok "dump 已恢复"
 else
   say "4/10 跳过 dump 恢复（要恢复请加 --restore-dump=/path/to.dump）"

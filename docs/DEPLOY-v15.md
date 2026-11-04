@@ -615,7 +615,18 @@ chmod +x scripts/deploy-bootstrap.sh
 
 它覆盖的步骤：前置检查 → 生成环境文件（4 把密钥现场随机，已存在则保留）→ 可选起 PG 容器 → 可选恢复 dump → `npm ci` + `prisma generate` → **`prisma migrate deploy`** → **私钥体检与补齐** → `npm run build` → 写 systemd 单元并启用 → 真验证。
 
-**一个守卫（被真实事故逼出来的）**：脚本第 9 步写 systemd 单元之前会检查目标文件——**已存在且 `WorkingDirectory` 指向另一个目录时拒绝覆盖**，退出非 0。
+**两个守卫（都是被真实事故/误操作逼出来的）**
+
+**关于「灌错库」**：`--with-docker-pg` 与 `--restore-dump` 都要操作具体容器，脚本先从 `LICENSE_DB_URL` 解析出 `user / db / host / port`，再校验目标容器映射的宿主端口与 URL 里的端口一致，不一致就停下：
+
+```
+✗ 容器 licensing-pg 映射的宿主端口是 [55432]，但 LICENSE_DB_URL 指向 127.0.0.1:55433。
+  这两者不是同一个库。确认清楚再继续，别把数据灌进错的库。
+```
+
+这条守卫的必要性：部署沙箱实例时若沿用默认容器名，`pg_restore --clean` 会**清空生产库再灌一份**。用 `--pg-container=名字` 指定别的容器。
+
+**关于「覆盖生产单元」**：脚本第 9 步写 systemd 单元之前会检查目标文件——**已存在且 `WorkingDirectory` 指向另一个目录时拒绝覆盖**，退出非 0。
 
 为什么需要：演练时我在 `/tmp` 下跑脚本，忘了它默认服务名就是 `licensing-saas`，于是把生产单元覆盖成了 `WorkingDirectory=/tmp/deploytest/licensing-saas` + `-p 3197`。systemd 不报错，`systemctl restart` 也不报错，只是安静地让「生产服务」跑起另一个目录里的代码。要接管同名单元必须显式 `--force`；部署第二实例应当用 `--service-name` 换名，本就不该撞上。
 
@@ -1776,6 +1787,7 @@ cd /root/授权saas && ./scripts/offsite-key-backup.sh
 | `/health/ready` 200 但签发 503「签名私钥文件不可读」 | 私钥不随包不随 dump 走，新机器上是空的 | `npx tsx scripts/repair-signing-keys.mts --apply`，见 §4.4② |
 | 补钥后库里出现多条 `active` 签名密钥 | 脚本早期版本没继承原行 `status` | 已修（继承 `status`/`not_before`），确认代码是 v1.5.0 之后；多出来的手工转 `retiring` |
 | 重启后服务跑的是别的目录/端口 | 同名 systemd 单元被另一份部署覆盖了 | `grep WorkingDirectory /etc/systemd/system/*.service`；`deploy-bootstrap.sh` 现在会拒绝这种覆盖 |
+| `pg_restore` 后生产数据没了 | `--restore-dump` 配了默认容器名，`--clean` 清的是生产库 | 用 `--pg-container=` 指定容器；脚本会校验容器端口与 `LICENSE_DB_URL` 是否一致 |
 
 ---
 
