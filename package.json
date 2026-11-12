@@ -13,6 +13,7 @@
     "start": "next start",
     "lint": "eslint",
     "lint:openapi": "node scripts/openapi-lint.mjs",
+    "check:prod-env": "tsx scripts/check-prod-env.mts",
     "openapi:json": "node scripts/generate-openapi-json.mjs",
     "verify": "npm run typecheck && npm run lint:openapi && npm run test && npm run build",
     "db:migrate": "prisma migrate deploy",

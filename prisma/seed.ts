@@ -15,6 +15,20 @@ import { PrismaClient } from "../src/generated/prisma/client";
 import { hashPassword } from "../src/lib/auth/password";
 import { addDuration } from "../src/lib/domain/period";
 import { ALL_PERMISSION_CODES, ROLE_PRESETS } from "../src/lib/domain/permissions";
+import { seedGuardDecision } from "../src/lib/seed-guard";
+
+/**
+ * 生产护栏：在**连库之前**判断。本文件会先 TRUNCATE 30 张业务表再灌演示数据，
+ * 一旦在生产库上跑错，代价是全部业务数据。判定逻辑与文案在 src/lib/seed-guard.ts。
+ */
+const seedGuard = seedGuardDecision(process.env);
+if (!seedGuard.allowed) {
+  console.error(seedGuard.reason);
+  process.exit(1);
+}
+if (seedGuard.warning) {
+  console.warn(seedGuard.warning);
+}
 
 const DATABASE_URL =
   process.env.LICENSE_DB_URL ??

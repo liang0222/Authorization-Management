@@ -333,3 +333,15 @@ docs/                         交付文档（见下）
   转正式头的步骤写在 `next.config.ts` 的注释里）。
   注意反向代理：`docs/DEPLOY-v15.md` 的 nginx 片段也加了 `X-Frame-Options SAMEORIGIN`，
   上生产时删掉 nginx 那条，只留应用层，否则同一响应里出现两个 `X-Frame-Options`。
+- **生产防呆护栏（阶段 2）**：`prisma/seed.ts` 在**连库之前**判断身份——`NODE_ENV=production` 或
+  `DEPLOYMENT_ENV=production` 时默认拒绝执行（退出码 1），只有显式 `ALLOW_DEMO_SEED=true` 才放行，
+  且放行前打 ⚠️ 横幅（它会 TRUNCATE 30 张表）。`DEPLOYMENT_ENV=production` 启动时还会查 `users` 表，
+  发现 `*@xinglan.dev` 或种子 displayName 的账号就并入启动闸门拦下（阶段 1 规则 → 退出码 1）；
+  查库失败（全新实例还没建表）只降级为警告，不拦安装器。单测在 `tests/unit/seed-guard.test.ts`、
+  `tests/unit/demo-accounts.test.ts`。
+- **上线前自检（阶段 2）**：`npm run check:prod-env -- --env-file /etc/licensing-saas/production.env`
+  （不传 `--env-file` 则读当前目录 `.env`）。逐项输出 PASS/FAIL，任一 FAIL 退出码 1，
+  可直接串进发布脚本。九项：四把密钥（`SESSION_SECRET` / `LICENSE_HMAC_PEPPER` / `BACKUP_ENCRYPTION_KEY` /
+  `SECRETBOX_KEY`）是否仍是开发默认值、`DEPLOYMENT_ENV` 是否 production、`DEV_MAIL_SINK` 是否 false、
+  `SIGNING_KEY_DIR` 是否还是 `.keys`、`APP_BASE_URL` 是否 https、`LICENSE_DB_URL` 是否仍在用开发口令。
+  **只输出结论**：不打印密钥值、长度、片段，连接串只报 host 与口令性质。

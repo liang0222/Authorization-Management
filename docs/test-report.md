@@ -23,7 +23,7 @@ Playwright 1.64.1（Chromium 1248）
 | 类型检查 | `npm run typecheck`（= `tsc --noEmit`） | **0 错误** | ~20s |
 | OpenAPI lint | `npm run lint:openapi` | **通过**（结构 / schema / servers / 凭证泄漏 / YAML↔JSON 同步） | ~1s |
 | 生产构建 | `npm run build` | **成功，106/106 静态页**；路由表 132 条 = 40 ○ + 5 ◐ + 87 ƒ（干净副本 `npm ci` 后同样通过，见 1.1） | ~50s |
-| 单元测试 | `npm run test`（= `npx vitest run`） | **309 passed (23 files)**（阶段 1 新增 7 条启动闸门用例） | 3.1s |
+| 单元测试 | `npm run test`（= `npx vitest run`） | **335 passed (26 files)**（阶段 1 新增 7 条启动闸门用例，阶段 2 新增 26 条护栏用例） | 3.7s |
 | 集成测试 | `npx vitest run -c vitest.integration.config.ts` | **12 passed** | 15.4s |
 | 端到端 | `npx playwright test` | **16 tests in 7 files：14 passed / 2 failed** | 2.7m |
 
@@ -37,7 +37,7 @@ Playwright 1.64.1（Chromium 1248）
 
 | 数字 | 命令 |
 | --- | --- |
-| 单元 302 / 22 文件 | `npx vitest run` → `Test Files 22 passed (22) / Tests 302 passed (302)` |
+| 单元 335 / 26 文件 | `npx vitest run` → `Test Files 26 passed (26) / Tests 335 passed (335)` |
 | 集成 12 / 1 文件 | `npx vitest run -c vitest.integration.config.ts`（先 `npm run db:seed`） |
 | 端到端 16 / 7 文件 | `npx playwright test --list` → `Total: 16 tests in 7 files`（含 1 条 setup） |
 | 静态页 106 | `npm run build` → `✓ Generating static pages using 3 workers (106/106)` |
@@ -228,11 +228,166 @@ DEPLOYMENT_ENV           过（=production）
 现网 3100 同样如此，说明页面的登录态是客户端判定的、服务端不拦；这不是阶段 1 引入的，
 记在这里避免阶段 5「越权矩阵」漏掉。
 
-## 2. 单元测试（309 个 / 23 个文件）
+### 1.3 生产防呆护栏（阶段 2 实测）
+
+本阶段解决的是「上线时最容易犯、犯了最贵」的三类错误：**在生产库上跑 seed**、**生产库里留着演示账号**、
+**拿开发默认值当生产配置**。全部实测都在隔离副本 `/root/s2`（`npm ci` 全新安装）+ 专用临时库
+`licensing_s2` / `licensing_s2_empty` 上做，没有连过生产库、没有重启过 `licensing-saas.service`。
+
+新增/改动的文件：
+
+| 文件 | 作用 |
+| --- | --- |
+| `src/lib/seed-guard.ts` | seed 生产护栏的纯判定（`seedGuardDecision`），可单测 |
+| `src/lib/demo-accounts.ts` | 演示账号识别（纯判定）+ 启动期查询（`demoAccountBootCheck`，失败降级为警告） |
+| `src/lib/prod-env-check.ts` | `check:prod-env` 的 9 项判定（纯函数，只输出结论不输出密钥） |
+| `scripts/check-prod-env.mts` | CLI：读 env 文件 → 逐项 PASS/FAIL → 任一 FAIL 退出码 1 |
+| `prisma/seed.ts` | 入口处接线护栏，在**连库之前**判断 |
+| `src/instrumentation.ts` | 把演示账号检测并入阶段 1 的启动闸门 |
+
+#### 1.3.1 seed 护栏：三种身份三种结果
+
+开发环境（`NODE_ENV` / `DEPLOYMENT_ENV` 都没设），对临时库跑 `npx tsx prisma/seed.ts`：
+
+```
+清理既有数据…
+种子数据完成：1 个组织、4 个产品、14 个客户、240 份授权、3 个 Webhook 端点。
+```
+
+模拟生产身份 `NODE_ENV=production`，同一条命令被拒，**退出码 1**：
+
+```
+拒绝执行 seed：当前是生产身份（NODE_ENV 或 DEPLOYMENT_ENV 为 production）。
+prisma/seed.ts 会先 TRUNCATE 30 张业务表再灌演示数据，这会把生产数据清空。
+如果确实是要给一台**全新的**生产/演示实例灌种子，显式设置 ALLOW_DEMO_SEED=true 再跑一次。
+开发与沙箱环境不受影响，无需设置该变量。
+```
+
+只设 `DEPLOYMENT_ENV=production`（`NODE_ENV` 不设）同样被拒，退出码 1 —— 两个变量取「或」，
+因为误跑的两种姿势都真实见过：容器里只配了 `DEPLOYMENT_ENV`，或者拿生产构建连了生产库。
+
+显式豁免 `ALLOW_DEMO_SEED=true` 后放行，但先打横幅（**退出码 0**）：
+
+```
+================================================================
+⚠️  ALLOW_DEMO_SEED=true：正在以生产身份执行演示种子数据！
+⚠️  这会清空 30 张业务表（TRUNCATE ... RESTART IDENTITY CASCADE）。
+⚠️  灌进去的账号密码是公开的演示口令，灌完必须立刻改密或删除。
+================================================================
+清理既有数据…
+种子数据完成：1 个组织、4 个产品、14 个客户、240 份授权、3 个 Webhook 端点。
+```
+
+判定只认精确的 `"true"`：`1` / `TRUE` / `yes` / `on` 一律不算豁免（单测钉住了这 5 个值）。
+`npm run db:reset` 末尾也是调 `prisma/seed.ts`，所以同样受这个护栏约束。
+
+#### 1.3.2 启动检测：库里有演示账号就拦启动
+
+生产配置（`DEPLOYMENT_ENV=production` + 三把非默认密钥 + `DEV_MAIL_SINK=false` + 独立 `SIGNING_KEY_DIR`）
++ 临时库里带着 seed 灌进去的三个账号，`npm run start -- -p 3016`：
+
+```
+[boot] NODE_ENV=production env=production 配置检查未通过：
+- 生产库里存在演示账号 audit@xinglan.dev（displayName=周睿（审计））：这是 seed 产物，密码是公开的演示口令，必须先改密或删除
+- 生产库里存在演示账号 ops@xinglan.dev（displayName=林可）：这是 seed 产物，密码是公开的演示口令，必须先改密或删除
+- 生产库里存在演示账号 owner@xinglan.dev（displayName=陈星岚）：这是 seed 产物，密码是公开的演示口令，必须先改密或删除
+```
+
+进程以**退出码 1** 结束（阶段 1 的 `process.exit(1)`，不是只 throw），端口不监听。
+
+把三个账号清掉（`organization_memberships` / `admin_sessions` → `licenses.created_by` 等外键先解绑再删 `users`）
+后同一配置重启：
+
+```
+[boot] env=production signingKeyDir=.keys-s2 backupDir=.backups 配置检查通过
+[webhook] dispatcher started, interval=5000ms
+[backup] scheduler started, interval=30000ms
+```
+
+查库失败（全新实例还没跑迁移，`users` 表不存在）**不会**拦启动，只降级成一行警告并写明原因：
+
+```
+[boot] 演示账号检测已跳过：查询 users 表失败（Invalid `prisma.users.findMany()` invocation: The table `public.users` does not exist in the current database.）。表未建属预期，安装完成后会重新检测。
+[boot] env=production signingKeyDir=.keys-s2 backupDir=.backups 配置检查通过
+```
+
+这条边界是刻意留的：表不存在是「还没装完」，不是「带着演示账号上线」——把它当 issue 会让安装器
+在第一次启动时就死在闸门上。开发/沙箱环境根本不查（那边本来就该有演示账号）。
+
+#### 1.3.3 `npm run check:prod-env`：全默认值必须全 FAIL
+
+对一份「照抄开发默认值」的 env 文件（9 项全部命中）：
+
+```
+FAIL  SESSION_SECRET        仍是开发默认值
+FAIL  LICENSE_HMAC_PEPPER   仍是开发默认值
+FAIL  BACKUP_ENCRYPTION_KEY 仍是开发默认值
+FAIL  SECRETBOX_KEY         未设置，会回落为由 SESSION_SECRET 派生
+FAIL  DEPLOYMENT_ENV        当前=development，应为 production
+FAIL  DEV_MAIL_SINK         当前=(未设置，默认 true)，生产必须为 false（否则重置链接会直接回给调用方）
+FAIL  SIGNING_KEY_DIR       仍指向开发共用的 .keys
+FAIL  APP_BASE_URL          http://127.0.0.1:3000 不是 https（会话 Cookie 的 Secure 标记因此不会开启）
+FAIL  LICENSE_DB_URL        仍在使用开发默认口令
+
+汇总：9 项，PASS 0 / FAIL 9
+
+结论：不满足生产要求，先改 env 再上线。
+```
+
+退出码 **1**。对合规 env 文件：
+
+```
+PASS  SESSION_SECRET        非开发默认值，长度满足要求
+PASS  LICENSE_HMAC_PEPPER   非开发默认值，长度满足要求
+PASS  BACKUP_ENCRYPTION_KEY 非开发默认值，长度满足要求
+PASS  SECRETBOX_KEY         独立密钥，长度满足要求
+PASS  DEPLOYMENT_ENV        =production
+PASS  DEV_MAIL_SINK         =false
+PASS  SIGNING_KEY_DIR       =.keys-prod
+PASS  APP_BASE_URL          https://license.example.com（https）
+PASS  LICENSE_DB_URL        host=127.0.0.1（本机/内网）。单机 Docker 部署这是正常的；如走公网请确认已开 sslmode=require
+
+汇总：9 项，PASS 9 / FAIL 0
+结论：全部通过，可以作为生产 env 使用。
+```
+
+退出码 **0**。密钥项**只输出结论**：不打印值、不打印长度、不打印前几位；`LICENSE_DB_URL` 只输出
+host 与「是否用了开发默认口令」，连接串里的口令不会出现在任何输出里（单测用一个 8 字符前缀断言钉住了这点）。
+
+#### 1.3.4 现网 `users` 表现状（只读，决定部署影响）
+
+```
+       email       | display_name
+-------------------+--------------
+ audit@xinglan.dev | 周睿（审计）
+ ops@xinglan.dev   | 林可
+ owner@xinglan.dev | 陈星岚
+(3 rows)
+```
+
+`SELECT count(*) FILTER (WHERE email LIKE '%@xinglan.dev'), count(*)` → **3 | 3**：生产库**只有一个用户表的 3 行，
+且 3 行全是演示账号**。结论直接、影响明确：
+
+> 本阶段代码一旦部署，`licensing-saas.service` 下次重启会**被自己的闸门拦下**（退出码 1，3100 起不来）。
+> 这不是 bug，是护栏生效——但必须**先处理账号再部署**。
+
+处置顺序（部署前做，任选其一）：
+
+1. **改名 + 改密**（最小改动，不动外键）：把三条 `users` 的 `email` / `display_name` 改成真实管理员信息，
+   `password_hash` 用后台的改密流程重设。改完 `email NOT LIKE '%@xinglan.dev'` 且 `display_name` 不在种子名单里，检测即不再命中。
+2. **先建真实账号再停用旧的**：新建管理员（非 `@xinglan.dev`、显示名不用「陈星岚/林可/周睿（审计）」），
+   然后删除旧账号——删除要按外键顺序解绑（`organization_memberships`、`admin_sessions`、`licenses.created_by`、
+   `license_renewals.created_by`、`backup_jobs.created_by`、`backup_restore_tests.created_by`、`password_reset_tokens`），
+   否则 `users` 删不掉（本节实测：直接 `DELETE FROM users` 会被 7 个外键挡住）。
+
+顺带说一句：这三个账号的密码是 `License#2026` 这种公开演示口令，也就是说现网 3100 现在有一个
+**人人知道密码的管理员入口**——这条比「重启被拦」更值得先处理。
+
+## 2. 单元测试（335 个 / 26 个文件）
 
 只测纯函数与领域规则，不碰数据库、不 mock 业务分支。
 
-逐文件用例数（`npx vitest run --reporter=json` 统计 `assertionResults.length`，合计 302）：
+逐文件用例数（`npx vitest run --reporter=json` 统计 `assertionResults.length`，合计 335）：
 
 | 文件 | 用例数 | 文件 | 用例数 |
 | --- | --- | --- | --- |
@@ -247,6 +402,8 @@ DEPLOYMENT_ENV           过（=production）
 | `tests/unit/deployment-environment.test.ts` | 8 | `tests/unit/signing-key.test.ts` | 8 |
 | `tests/unit/openapi.test.ts` | 7 | `tests/unit/secretbox.test.ts` | 6 |
 | `tests/unit/activation-token.test.ts` | 5 | `tests/unit/openapi-lint.test.ts` | 1 |
+| `tests/unit/prod-env-check.test.ts` | 10 | `tests/unit/seed-guard.test.ts` | 8 |
+| `tests/unit/demo-accounts.test.ts` | 8 | `tests/unit/boot-gate.test.ts` | 7 |
 
 ### 2.1 `tests/unit/period.test.ts`（14 个）
 

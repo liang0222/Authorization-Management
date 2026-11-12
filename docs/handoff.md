@@ -8,11 +8,16 @@
 
 后台已经可以完整走通「建产品 → 定功能 → 定套餐 → 签授权 → 客户端激活 → 心跳/读权限 →
 续费/暂停/解绑/撤销 → 审计留痕」全链路，并新增「备份与灾备」（多目标备份 → 加密 →
-上传 → 回读校验 → 隔离恢复演练）。类型检查 0 错、构建 106/106 静态页、302 单元、
+上传 → 回读校验 → 隔离恢复演练）。类型检查 0 错、构建 106/106 静态页、335 单元、
 12 集成、16 端到端（实测 14 过 2 失败，见 2.1 表末两行与第 2.3 节）。
 另有**一条已知缺陷**必须先知道：2 条备份 E2E 在纯净种子下必失败（见 2.2 表）。
 （原先「干净安装后 build 必失败」那条已在阶段 0.5 修复：`turbopack.resolveAlias` 把 `cpu-features`
 指到构建期替身，见 2.2 表末行与 [`test-report.md`](test-report.md) 第 1.1 节。）
+
+> ⚠️ **部署阶段 2 之前必须先处理账号**：现网 `licensing` 库的 `users` 表只有 3 行，且**全是**
+> `*@xinglan.dev` 的演示账号（密码是公开的 `License#2026`）。阶段 2 的启动检测会把它们判成
+> 拦截项，也就是说**这份代码一部署，`licensing-saas.service` 下次重启就会被自己的闸门拦下**。
+> 处置顺序见 2.2 表首行。
 
 ---
 
@@ -24,13 +29,16 @@
 | --- | --- | --- |
 | `npx tsc --noEmit` | 0 错误 | 每批改动后执行 |
 | `npm run build` | 106/106 静态页 | 生产构建实测（`Generating static pages (106/106)`；路由表 132 条 = 40 ○ + 5 ◐ + 87 ƒ）。**干净副本 `npm ci` 后同样通过**（阶段 0.5 修复后实测，见 2.2 表末行） |
-| 单元测试 | 309 passed (23 files) | `npx vitest run`（含备份加解密 / 状态判定 / cron 校验 / 安装器契约 / 启动闸门四组合） |
+| 单元测试 | 335 passed (26 files) | `npx vitest run`（含备份加解密 / 状态判定 / cron 校验 / 安装器契约 / 启动闸门四组合 / seed 护栏与 `check:prod-env` 判定 / 演示账号检测） |
 | 集成测试 | 12 passed | `npx vitest run -c vitest.integration.config.ts`，真实 HTTP + PostgreSQL；**必须干净种子**，脏库会让「并发激活」那条偶发 422 |
 | 端到端 | 16 tests in 7 files，实测 **14 passed / 2 failed** | `npx playwright test`（桌面 + Pixel 7，含只读角色 1 条）。失败的两条是 `tests/e2e/05-backups.spec.ts` 的「被策略引用的目标不允许直接删除」与「立即备份 → 完整性校验 → 隔离恢复演练」——它们假设库里已有备份目标/策略，而 `prisma/seed.ts` 不建备份数据，纯净种子下必然失败（详见第 2.3 节） |
 | 备份全链路 | 16 项冒烟全 PASS | 建目标 → 连接测试 → 建策略 → 立即备份 201 `succeeded` → 回读校验 → 隔离恢复演练 `passed` RTO 3s → 概览统计 → 删除被引用目标 409 |
 | 备份页交互 | 5 条 E2E | 五块真实数据 / 新增目标（含空名称拦截）/ 连接测试 / 删除二次确认 / 被引用拒删 / 立即备份→校验→演练 / 只读账号按钮全禁用且有说明 |
 | 登录 → 签发 → 激活 → 心跳 → 权限 → 解绑 | 全通 | 手工 curl 脚本 + 集成测试双覆盖 |
 | 并发不突破设备上限 | 成立 | `max_devices=1` 双设备并发恒为 `[201, 409]` |
+| seed 生产护栏 | 三种身份三种结果 | 开发 → 正常灌种子；`NODE_ENV=production` 或 `DEPLOYMENT_ENV=production` → 退出码 1 + 拒绝原文；`ALLOW_DEMO_SEED=true` → 放行并打 ⚠️ 横幅（临时库实测，见 test-report 1.3.1） |
+| 演示账号启动检测 | 命中即拦、查库失败只警告 | 生产配置 + 临时库有种子账号 → `[boot] ... 配置检查未通过` 逐条列出 3 个账号、退出码 1；清掉账号后 `[boot] env=production ... 配置检查通过`；指向未迁移的空库 → 只打「演示账号检测已跳过」警告并继续启动（见 test-report 1.3.2） |
+| `npm run check:prod-env` | 全默认值 9 项全 FAIL / 合规 9 项全 PASS | 退出码分别 1 与 0；密钥项只输出结论（不打印值、长度、片段），连接串只输出 host 与口令性质（见 test-report 1.3.3） |
 | 登录后循环跳转 | 已修复 | 见第 4.1 节 |
 | 移动端抽屉闪关 | 已修复 | 见第 4.2 节 |
 | 产品详情页 `licenseByStatus.map` 崩溃 | 已修复 + 已加路由巡检 | 见第 4.13 节 |
@@ -44,6 +52,7 @@
 
 | 项 | 原因 | 要做的话 |
 | --- | --- | --- |
+| **生产库 3 个用户全是演示账号**（`owner@` / `ops@` / `audit@xinglan.dev`，密码 `License#2026`） | 现网从未换过账号；`prisma/seed.ts` 建的就是这三个。阶段 2 的启动检测会把它当拦截项 | **部署阶段 2 前**任选：①改名 + 改密（不动外键，最小改动）；②先建真实管理员再删旧的（删除要按 7 个外键顺序解绑：`organization_memberships`、`admin_sessions`、`licenses.created_by`、`license_renewals.created_by`、`backup_jobs.created_by`、`backup_restore_tests.created_by`、`password_reset_tokens`）。不改就部署 → 重启即被闸门拦下 |
 | `/app/devices/[id]` 设备详情页 | 不在 NAV 里，列表已能查到设备且可释放/封禁 | 后端 `GET /admin/devices/[id]` 已就绪（档案 + 激活历史 + 事件），照 `customers/[id]` 的写法加页面即可 |
 | `/app/settings/roles` 角色管理页 | 成员页已消费 `GET /admin/roles` 的角色下拉 | 后端 `GET/POST /admin/roles` 已就绪，做一个「角色 + 权限勾选」列表页 |
 | 多实例部署 | 单实例够用，注释已标注 | 限流与幂等换成 Redis |
@@ -52,7 +61,7 @@
 | 2 条备份 E2E 在纯净种子下必失败 | 用例假设库里已有备份目标/策略，`prisma/seed.ts` 不建备份数据 | 给 `prisma/seed.ts` 补一个本地暂存目标 + 一条策略，或让用例自己 `request.post` 建前置数据 |
 | CSP 仍是 `Report-Only` | 阶段 1 只上观察模式，直接强制会打挂 Next 内联脚本 | 按 `next.config.ts` 注释四步走：观察两周无新违例 → 键名改成 `Content-Security-Policy` → 用 middleware 下发 nonce 替掉 `script-src 'unsafe-inline'` → 先在 3101 验证一周再动 3100 |
 | nginx 与应用层重复下发 `X-Frame-Options` | `docs/DEPLOY-v15.md` 的 nginx 片段有 `add_header X-Frame-Options SAMEORIGIN always;`，应用层现在是 `DENY` | 上生产时删掉 nginx 那条，只留应用层；否则同一响应出现两个值，浏览器解释顺序不确定 |
-| `npm run db:reset` 脚本失效 | `prisma migrate reset --force --skip-seed` 在 Prisma 7.10.1 报 `unknown or unexpected option: --skip-seed`（exit 1） | 改成 `prisma migrate reset --force`（会连带跑 seed），或删掉 `--skip-seed` 参数 |
+| `npm run db:reset` 脚本失效 | `prisma migrate reset --force --skip-seed` 在 Prisma 7.10.1 报 `unknown or unexpected option: --skip-seed`（exit 1） | 改成 `prisma migrate reset --force`（会连带跑 seed），或删掉 `--skip-seed` 参数。注意它末尾调 `prisma/seed.ts`，因此同样受阶段 2 的 seed 护栏约束（生产身份要 `ALLOW_DEMO_SEED=true`） |
 | ~~干净安装后 `npm run build` 必失败~~ **已修复（阶段 0.5）** | `cpu-features` 是 `ssh2` 的 optionalDependency，带原生 addon `build/Release/cpufeatures.node`；干净 `npm ci` 会装上并编译成功，Turbopack 打包 `ssh2`（经 `src/lib/services/backup/adapters/sftp.ts` → `src/instrumentation.ts`）时报 `non-ecmascript placeable asset` | 修法：`next.config.ts` 里 `turbopack.resolveAlias` 把 `cpu-features` 指到 `src/lib/shims/cpu-features-noop.cjs`（返回 `undefined`），等价于「该可选包不存在」，加密回退纯 JS。**不要再试**：`serverExternalPackages` 无效；`--omit=optional` 会连带移除 `pg-cloudflare` 改报 `Module not found`。干净副本 `npm ci` → build exit 0 / 106 静态页 / 302 单元 / SFTP 真实往返全 PASS，见 [`test-report.md`](test-report.md) 第 1.1 节 |
 
 ### 2.3 数字口径（2026-11 实测，复跑即可核对）
@@ -62,7 +71,7 @@
 | 页面 49 | `find src/app -name 'page.tsx' \| wc -l` | 后台 26 + 开发者文档 17 + 认证 3 + 根 1 + `/install` 1 + `/openapi` 1 |
 | API 路由 74 | `find src/app/api -name 'route.ts' \| wc -l` | `api/install` 4 + `api/v1/admin` 54 + `api/v1/auth` 5 + `api/v1` 公开 11 |
 | route handler 82 | `find src/app -name 'route.ts' \| wc -l` | 74 + `developers/` 5 + `/health/live`·`/health/ready`·`/metrics` 3 |
-| 单元 309 / 23 文件 | `npx vitest run` | `Test Files 23 passed (23) / Tests 309 passed (309)` |
+| 单元 335 / 26 文件 | `npx vitest run` | `Test Files 26 passed (26) / Tests 335 passed (335)` |
 | 集成 12 | `npx vitest run -c vitest.integration.config.ts` | `Tests 12 passed (12)`（先 `npm run db:seed`） |
 | 端到端 16 / 7 文件 | `npx playwright test --list` | `Total: 16 tests in 7 files`；实测 14 passed / 2 failed |
 | 静态页 106 | `npm run build` | `✓ Generating static pages using 3 workers (106/106)` |

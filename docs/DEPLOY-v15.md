@@ -360,7 +360,21 @@ npm run db:seed               # 灌种子数据
 | `ops@xinglan.dev` | `License#2026` | 运营 |
 | `audit@xinglan.dev` | `License#2026` | 只读 |
 
-**上线第一件事就是改掉这三个密码。**
+**上线第一件事就是改掉这三个密码**，而且不能只改密码——阶段 2 的启动检测按「邮箱域 `@xinglan.dev` /
+种子 displayName」识别演示账号，命中就拒绝启动。也就是说：**直接用 seed 建账号再上线，服务起不来**。
+把邮箱与显示名一起换掉（不动 id，避免外键牵连），再用后台改密流程重设口令：
+
+```bash
+docker exec -i licensing-pg psql -U licensing -d licensing <<'SQL'
+UPDATE users SET email='admin@你的域名', display_name='运维管理员' WHERE email='owner@xinglan.dev';
+UPDATE users SET email='ops@你的域名',   display_name='运营'       WHERE email='ops@xinglan.dev';
+UPDATE users SET email='audit@你的域名', display_name='审计'       WHERE email='audit@xinglan.dev';
+SQL
+```
+
+另外：阶段 2 起，`npm run db:seed` 在 `NODE_ENV=production` 或 `DEPLOYMENT_ENV=production` 下**默认拒绝执行**
+（退出码 1）。全新初始化确实要灌演示数据时，显式加 `ALLOW_DEMO_SEED=true`，并注意它会打印 ⚠️ 横幅、
+清空 30 张表。
 
 ### 4.3 验证数据
 
@@ -595,6 +609,17 @@ echo 'LICENSE_DB_URL=postgresql://licensing:你的密码@127.0.0.1:55432/licensi
 - `DEV_MAIL_SINK` 不是 `false`
 
 漏一项服务就起不来，日志里会列清楚是哪项。
+
+### 5.4.1 上线前跑一遍自检
+
+不用等启动才知道配置对不对：
+
+```bash
+npm run check:prod-env -- --env-file /etc/licensing-saas/production.env
+```
+
+九项逐条 PASS/FAIL，任一 FAIL 退出码 1（可直接串进发布脚本）。它只报结论，不打印密钥值、长度或片段；
+`LICENSE_DB_URL` 只报 host 与「是否还在用开发默认口令」。缺文件会以退出码 2 报「读不到 env 文件」。
 
 ### 5.5 沙箱环境文件（可选）
 

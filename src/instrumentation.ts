@@ -1,5 +1,6 @@
 import { config, productionSafetyIssues } from "@/lib/config";
 import { backgroundWorkersAllowed, startBackgroundWorkers } from "@/lib/background";
+import { demoAccountBootCheck, findDemoAccountIssues } from "@/lib/demo-accounts";
 
 /**
  * 服务端启动钩子。
@@ -60,6 +61,16 @@ export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
 
   const issues = bootSafetyIssues();
+
+  /**
+   * 生产库里混进 seed 演示账号也是「配置不合法」的一种（阶段 2）：
+   * 那三个 `*@xinglan.dev` 账号的密码是公开的演示口令，等于给了个人人可用的管理员入口。
+   * 只查 `DEPLOYMENT_ENV=production`；查不到表（还没装完）只警告不拦截。
+   */
+  const demoCheck = await demoAccountBootCheck(config.deploymentEnv, findDemoAccountIssues);
+  if (demoCheck.warning) console.warn(demoCheck.warning);
+  issues.push(...demoCheck.issues);
+
   if (issues.length > 0) {
     const header = `[boot] NODE_ENV=${process.env.NODE_ENV ?? "未设置"} env=${config.deploymentEnv} 配置检查未通过：`;
     if (bootMustFail(issues)) {

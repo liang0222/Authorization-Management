@@ -10,6 +10,34 @@ Release Note、commit、迁移 ID 与回滚方式。
 
 ## [Unreleased]
 
+### 安全 · 生产防呆护栏：seed 拒跑、演示账号拦启动、上线前自检（阶段 2）
+
+阶段 0 踩过的那次「`npm run db:seed` 打到生产库、3100 变 503」不该只靠人记性避免；现网库里还留着
+seed 建的三个演示账号（密码是公开的 `License#2026`）。本阶段把这三件事做成代码常量。
+
+- **seed 护栏（`src/lib/seed-guard.ts` + `prisma/seed.ts`）**：在**连库之前**判断身份，
+  `NODE_ENV=production` 或 `DEPLOYMENT_ENV=production` 时默认拒绝执行并以退出码 1 结束，
+  报错正文说明「本脚本会先 TRUNCATE 30 张业务表」；只有显式 `ALLOW_DEMO_SEED=true` 才放行，
+  且放行前打印 ⚠️ 横幅。两个变量取「或」——误跑的两种姿势（容器只配 `DEPLOYMENT_ENV`、
+  拿生产构建连生产库）都真实存在。判定只认精确的 `"true"`，`1`/`TRUE`/`yes`/`on` 不算豁免。
+  演示数据内容本身未改动。
+- **启动检测（`src/lib/demo-accounts.ts` + `src/instrumentation.ts`）**：`DEPLOYMENT_ENV=production`
+  启动时查 `users` 表，命中 `*@xinglan.dev` 或种子 displayName（陈星岚 / 林可 / 周睿（审计））
+  就**每个账号一条 issue** 并入阶段 1 的启动闸门（生产构建 → 退出码 1）。查库失败（全新实例还没建表）
+  只降级为一行警告，不拦安装器；开发/沙箱根本不查。
+- **上线前自检（`src/lib/prod-env-check.ts` + `scripts/check-prod-env.mts` + `npm run check:prod-env`）**：
+  `--env-file`（默认 `.env`）逐项 PASS/FAIL，任一 FAIL 退出码 1。九项：`SESSION_SECRET` /
+  `LICENSE_HMAC_PEPPER` / `BACKUP_ENCRYPTION_KEY` / `SECRETBOX_KEY` 是否仍是开发默认值（含长度下限 32）、
+  `DEPLOYMENT_ENV=production`、`DEV_MAIL_SINK=false`、`SIGNING_KEY_DIR≠.keys`、`APP_BASE_URL` 为 https、
+  `LICENSE_DB_URL` 是否仍在用开发口令。**只输出结论**：不打印密钥值、长度、片段；连接串只报 host 性质。
+- **验证**：新增 26 条单测（`seed-guard` 8 / `prod-env-check` 10 / `demo-accounts` 8），
+  隔离副本 `npm ci` → `tsc --noEmit` exit 0 / `npm test` **335 passed (26 files)** / `npm run build` exit 0、106 静态页；
+  临时库实测 seed 三种身份（正常 / 拒绝退出 1 / 豁免放行带横幅）、启动检测两种结果（命中拦截退出 1、清账号后通过）、
+  空库降级警告、`check:prod-env` 全 FAIL 与全 PASS 两组输出。
+- **部署前必须处理**：现网 `licensing` 库 `users` 表 3 行全是演示账号，本版代码一部署，
+  `licensing-saas.service` 下次重启就会被自己的闸门拦下——处置顺序见 `docs/handoff.md` §2.2 首行。
+- 记录更新：`README.md` §7、`docs/test-report.md` §1.3（新增验收小节）、`docs/handoff.md` §1/§2.1/§2.2/§2.3。
+
 ### 安全 · 生产启动闸门硬拦截 + 全站安全响应头（阶段 1）
 
 阶段 0 实测过一个真问题：`NODE_ENV=production` + `DEPLOYMENT_ENV=development` + 开发默认密钥 +

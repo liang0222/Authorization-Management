@@ -9,7 +9,8 @@
 
 import { credentialEnvironmentFor } from "@/lib/domain/deployment-environment";
 
-const DEV_DEFAULTS = {
+/** 开发默认值。阶段 2 的 `check:prod-env` 与 seed 护栏要用同一份定义，故导出。 */
+export const DEV_DEFAULTS = {
   // 数据库变量名使用 LICENSE_DB_URL：本机环境禁止读写 .env，
   // 避免继承到无关的 DATABASE_URL（可能指向不存在的本地实例）。
   LICENSE_DB_URL:
