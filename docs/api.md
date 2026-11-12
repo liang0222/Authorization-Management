@@ -1,7 +1,16 @@
 # API 契约
 
-后台前端与客户端 SDK 共用的 HTTP 契约。全部路由在 `src/app/api/v1/`，共 66 个 route handler（管理 50 / 认证 5 / 公开协议 11）；
-另有 5 个 `src/app/developers/*` 的静态文档 route（llms / openapi / ai 提示词），合计 71 个。
+后台前端与客户端 SDK 共用的 HTTP 契约。全部路由在 `src/app/api/v1/`，共 70 个 route handler
+（管理 54 / 认证 5 / 公开协议 11）；
+另有 `src/app/api/install/` 的 4 个安装器 route、5 个 `src/app/developers/*` 的静态文档 route
+（llms / openapi / ai 提示词）与 `/health/live`、`/health/ready`、`/metrics` 3 个运维端点，
+全仓 route handler 合计 82 个。
+
+统计口径（实测，可直接复跑）：`find src/app/api/v1 -name 'route.ts' | wc -l` → 70；
+`find src/app/api/v1/admin -name 'route.ts' | wc -l` → 54；
+`find src/app/api/v1/auth -name 'route.ts' | wc -l` → 5；
+`find src/app/api/v1 -name 'route.ts' -not -path '*/admin/*' -not -path '*/auth/*' | wc -l` → 11；
+`find src/app -name 'route.ts' | wc -l` → 82。
 
 - 管理接口前缀：`/api/v1/admin/*`（需登录 + RBAC）
 - 认证接口前缀：`/api/v1/auth/*`
@@ -252,7 +261,8 @@ Webhook 事件（10 种）：`license.activated`、`license.renewed`、`license.
 | POST | `/v1/activations/deactivate` | Bearer | 解绑（默认不返还激活次数） |
 | POST | `/v1/licenses/validate` | `x-client-id` | 只校验不占设备，用于「预检查」 |
 
-v1.5 新增的三个公开端点在下一节，它们不在「激活主链路」上，但客户端离线和强授权要用。
+v1.5 新增的四个公开端点在下一节，它们不在「激活主链路」上，但客户端离线、强授权与
+服务端二次校验要用。
 
 ### 4.1 挑战规范化消息（v1，带版本前缀）
 
@@ -277,10 +287,11 @@ expires_at
 | 方法 | 路径 | 认证 | 说明 |
 | --- | --- | --- | --- |
 | GET | `/v1/activations/{activation_id}` | Bearer | 查当前激活状态。**不可用也返回 200**，靠 `usable` / `status_reason` 区分「网络断了」与「授权真失效」 |
+| POST | `/v1/server/licenses/check` | `private_key_jwt` | 给网站/小程序后端用的授权检查：传已验过的用户标识 `identity.subject_token`（服务端只存 `sha256` 比对），返回 `authorized` 与 `missing_features` |
 | POST | `/v1/offline-grants` | Bearer | 签离线授权文件。`valid_until = min(now + grace_seconds, 授权到期时间)`，最长 90 天；签名覆盖 `canonicalJson(grant)` |
 | POST | `/v1/oauth/token` | `private_key_jwt` | 服务端用断言换短期令牌。只支持 `private_key_jwt`，显式拒绝 `client_credentials` 与 `client_secret`；scope 只能收窄 |
 
-三个端点都已在 `public/openapi/openapi-v1.yaml` 里声明，并被 `tests/unit/openapi.test.ts`
+四个端点都已在 `public/openapi/openapi-v1.yaml` 里声明，并被 `tests/unit/openapi.test.ts`
 的正反向比对覆盖（代码有、契约无会失败，反之亦然）。
 
 ### 4.2 激活的事务语义

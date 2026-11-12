@@ -10,6 +10,42 @@ Release Note、commit、迁移 ID 与回滚方式。
 
 ## [Unreleased]
 
+### 文档 · 数字与实测对账
+
+上线前把文档里的数量类表述全部按本轮实测重写，并补上一直漏掉的 Prisma Client 生成步骤：
+
+- **数字全部重测**：单元测试 302 个 / 22 个文件（旧文写 75 个 / 7 个文件或 66 个）、
+  集成测试 12 个、端到端 16 个 / 7 个文件、静态页 106/106（旧文写 91/91 或 88/88）、
+  页面路由 49 个（旧文 46）、API 路由 74 个、`route.ts` 合计 82 个（旧文 66/71/76）。
+  `README.md`、`docs/handoff.md`、`docs/test-report.md`、`docs/api.md` 四处同步，每处数字旁
+  都写明统计命令或口径，可直接复跑核对。
+- **`npx prisma generate` 补进上手步骤**：`prisma/schema.prisma` 的 generator 输出到
+  `src/generated/prisma`，该目录被 `.gitignore` 排除，`npm install` 也不会自动补（刻意没挂
+  `postinstall`）。README §1.2 与 `docs/handoff.md` §3.1 都加上了这一步并说明缺它的症状
+  （`typecheck` 报 `Cannot find module '@/generated/prisma/...'`、部分单测失败）。
+- **如实记录两条端到端失败**：`tests/e2e/05-backups.spec.ts` 的「被策略引用的目标不允许直接删除」
+  与「立即备份 → 完整性校验 → 隔离恢复演练」在**纯净种子**下必然失败——`prisma/seed.ts` 不创建
+  备份目标与策略，而这两条用例假定已存在。早期「16 passed」是在跑过多轮 e2e 的脏库上得到的。
+  本轮只记录不修（属于测试/种子数据问题，留待后续阶段），`docs/test-report.md` 新增 §4.7
+  写明根因与两种修法。
+- 顺带修正：`docs/api.md` 把 v1.5 新增公开端点从「三个」改为四个（补上
+  `POST /v1/server/licenses/check`，它一直在契约与实现里）；`docs/test-report.md` 的
+  `backup.test.ts` 用例数 15 → 26 并补齐后三组（`backupObjectKey` / WebDAV MKCOL / 上传重试）；
+  `04-routes.spec.ts` 覆盖路由 21/22 → 23 条；导航遍历 17 → 16 项。
+- **如实记录一个更严重的构建缺陷（未修）**：干净副本上 `npm install` / `npm ci` 之后
+  `npm run build` **必然失败**，报
+  `./node_modules/cpu-features/lib/index.js  Error: non-ecmascript placeable asset`。
+  `cpu-features` 是 `ssh2` 的 optionalDependency，带原生 addon `cpufeatures.node`；SFTP 备份适配器
+  静态 import `ssh2`，链路经 `src/instrumentation.ts` 被 Edge instrumentation 拉到，Turbopack 无法
+  把 node addon 放进 ESM chunk。本机 `node_modules` 里恰好没有这个包（当初编译失败被跳过），
+  所以本地构建一直能过——**「构建成功」这个结论只在现有依赖树上成立**。
+  `serverExternalPackages` 实测无效；`npm install --omit=optional` 也会连带移除 `pg` 的 optional
+  依赖 `pg-cloudflare`，build 改报 `Module not found: Can't resolve 'pg-cloudflare'`。
+  尚未试的是 `turbopack.rules` 单独标 external 或 `overrides` 只剔除这一个包，属构建配置改动，
+  本轮（阶段 0 只做文档对账）不动。
+  `docs/test-report.md` 新增 §1.1 记录复现步骤、真实报错与 import trace，
+  `docs/handoff.md` §2.2 与 `README.md` §1.2 各加一条醒目提示。
+
 ### 安全 · 公开发布前清理
 
 把本机专属的标识从代码与文档里彻底剥离，仓库可以安全公开托管：

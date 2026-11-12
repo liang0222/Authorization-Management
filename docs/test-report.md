@@ -2,14 +2,17 @@
 
 本文件只记录**实际执行过**的结果。凡是「未执行」都明确写出，不把类型检查当功能验证。
 
-执行环境：
+执行环境（本轮实测，2026-11）：
 
 ```
-Node v24.22.0 / npm 12.2.1
+Node v26.13.0 / npm 11.20.0
 PostgreSQL 16（Docker 容器 licensing-pg，127.0.0.1:55432）
 Next.js 16.4.3（生产构建 next start -p 3001 / 开发 next dev -p 3000）
-Playwright 1.64.1（Chromium）
+Playwright 1.64.1（Chromium 1248）
 ```
+
+> 上一版这里写的是 `Node v24.22.0 / npm 12.2.1`，是更早一次执行的机器环境；本轮全部数字都按
+> 上面的版本重跑过，下面的「结果」列与之一一对应。
 
 ---
 
@@ -17,17 +20,118 @@ Playwright 1.64.1（Chromium）
 
 | 层级 | 命令 | 结果 | 耗时 |
 | --- | --- | --- | --- |
-| 类型检查 | `npx tsc --noEmit` | **0 错误** | ~20s |
-| 生产构建 | `npm run build` | **成功，91/91 静态页** | ~50s |
-| 单元测试 | `npx vitest run` | **75 passed (7 files)** | 1.1s |
+| 类型检查 | `npm run typecheck`（= `tsc --noEmit`） | **0 错误** | ~20s |
+| OpenAPI lint | `npm run lint:openapi` | **通过**（结构 / schema / servers / 凭证泄漏 / YAML↔JSON 同步） | ~1s |
+| 生产构建 | `npm run build` | **成功，106/106 静态页**；路由表 132 条 = 40 ○ + 5 ◐ + 87 ƒ（仅限现有依赖树，见 1.1） | ~50s |
+| 单元测试 | `npm run test`（= `npx vitest run`） | **302 passed (22 files)** | 3.1s |
 | 集成测试 | `npx vitest run -c vitest.integration.config.ts` | **12 passed** | 15.4s |
-| 端到端 | `npx playwright test` | **16 passed** | 1.1m |
+| 端到端 | `npx playwright test` | **16 tests in 7 files：14 passed / 2 failed** | 2.7m |
+
+> 端到端那 2 条失败见第 4 节末尾「纯净种子下的两条失败」——是真实差异，不是环境噪音。
+> 上一版写「16 passed」是在跑过多轮 e2e 的脏库上得到的。
+>
+> 生产构建那一行是**现有依赖树**的结果。本轮另建的干净副本上 `npm install` / `npm ci` 后
+> build 会失败（Turbopack 打包 `ssh2` → `cpu-features` 原生 addon），见 1.1 节。
+
+数字口径（都可直接复跑）：
+
+| 数字 | 命令 |
+| --- | --- |
+| 单元 302 / 22 文件 | `npx vitest run` → `Test Files 22 passed (22) / Tests 302 passed (302)` |
+| 集成 12 / 1 文件 | `npx vitest run -c vitest.integration.config.ts`（先 `npm run db:seed`） |
+| 端到端 16 / 7 文件 | `npx playwright test --list` → `Total: 16 tests in 7 files`（含 1 条 setup） |
+| 静态页 106 | `npm run build` → `✓ Generating static pages using 3 workers (106/106)` |
+| 页面 49 | `find src/app -name 'page.tsx' \| wc -l` |
+| API 路由 74 / route handler 82 | `find src/app/api -name 'route.ts' \| wc -l` / `find src/app -name 'route.ts' \| wc -l` |
+
+### 1.1 干净安装后 `npm run build` 会失败（本轮实测，未修）
+
+上面「生产构建成功」那一行是在**本机现有 `node_modules`** 上跑出来的。为了验证「新克隆一台机器能不能起来」，
+本轮另建了两份隔离副本（`git archive HEAD` + 打上本轮文档 diff），分别用 `npm install` 和 `npm ci` 全新安装，
+结果 **build 都失败**，且可稳定复现：
+
+```
+> licensing-saas@0.1.0 build
+> node scripts/copy-api-reference.mjs && next build
+
+▲ Next.js 16.4.3 (Turbopack)
+  Creating an optimized production build ...
+Turbopack build encountered 27 warnings:
+...
+
+> Build error occurred
+Error: Turbopack build failed with 1 error:
+./node_modules/cpu-features/lib/index.js
+Error: non-ecmascript placeable asset
+[project]/node_modules/cpu-features/build/Release/cpufeatures.node (node addon) is not placeable in ESM chunks,
+so it doesn't have a module id and can't be imported here. Only modules that are compiled to JavaScript can be imported.
+
+Import traces:
+  externals-tracing:
+    ./node_modules/cpu-features/lib/index.js [externals-tracing]
+    ./node_modules/ssh2/lib/protocol/constants.js [externals-tracing]
+    ./node_modules/ssh2/lib/client.js [externals-tracing]
+    ./node_modules/ssh2/lib/index.js [externals-tracing]
+    [externals]/ssh2 [external]
+    ./src/lib/services/backup/adapters/sftp.ts [App Route]
+    ./src/lib/services/backup/factory.ts [App Route]
+    ./src/app/api/v1/admin/backups/destinations/[id]/test/route.ts [App Route]
+  Edge Instrumentation:
+    ./node_modules/cpu-features/lib/index.js
+    ...
+    ./src/instrumentation.ts
+```
+
+- **根因**：`cpu-features` 是 `ssh2` 的 `optionalDependencies`（`node_modules/ssh2/package.json`：
+  `"optionalDependencies": {"cpu-features": "~0.0.10", "nan": "^2.23.0"}`）。它带一个原生 addon
+  `build/Release/cpufeatures.node`，一旦安装并编译成功，Turbopack 就会在打包 `ssh2` 时踩到它并报
+  `non-ecmascript placeable asset`。SFTP 备份适配器（`src/lib/services/backup/adapters/sftp.ts`）
+  静态 import 了 `ssh2`，这条链一路被 `src/instrumentation.ts` 的 Edge instrumentation 拉到。
+- **为什么本机能 build**：本机 `node_modules/cpu-features` 根本不存在（`npm ls cpu-features` → `(empty)`，
+  `require.resolve` 报 `MODULE_NOT_FOUND`）——当初安装时这个可选依赖编译失败被跳过了，本机是**侥幸**成功。
+  干净安装（`npm install` 与 `npm ci` 都验过）会把它装上并编译成功，于是必然失败。
+- **验证**：把副本里的 `node_modules/cpu-features` 移走后 build 立刻成功
+  （`✓ Compiled successfully in 3.3s`、`✓ Generating static pages using 3 workers (106/106)`）；
+  移回后再次 `BUILD_EXIT=1`，同样报错。即确定性复现，不是偶发。
+- **试过但无效的修法**（都是实测，不是推测）：
+  1. `next.config.ts` 加 `serverExternalPackages: ["ssh2", "cpu-features"]` → 仍然
+     `non-ecmascript placeable asset`，该选项对 Turbopack 打包 node addon 不生效。
+  2. `npm install --omit=optional` → `cpu-features` 确实被移除了，但 **`pg` 的 optionalDependency
+     `pg-cloudflare` 也一起被移除**，build 改报另一个错：
+     `./node_modules/pg/lib/stream.js:41:34  Error: Module not found: Can't resolve 'pg-cloudflare'`。
+     即 `--omit=optional` 不能作为整体方案。
+  3. `.npmrc` 写 `optional=false` 与 2 同因同果（都是全局关闭 optional 依赖），不解决。
+
+  尚未试的方向：在 `turbopack.rules` 里单独把 `cpu-features` 标成 external，
+  或用 `overrides` / 锁文件层面只剔除这一个包。两条都属构建配置改动，
+  **本轮（阶段 0，只做文档对账）不动**，登记在此供后续阶段处理。
+
+**对本节其它结论的影响**：`typecheck`、`lint:openapi`、`test`、集成测试在干净副本上都是绿的
+（302 单元 / 12 集成，与主仓库一致），只有 `build` 这一环受上述缺陷影响。主仓库当前 `.next` 是
+在缺 `cpu-features` 的依赖树上构建的，所以「生产构建成功」这个结论本身成立，但**不能据此认为
+「新机器照 README 装完就能 build」**。
 
 ---
 
-## 2. 单元测试（75 个）
+## 2. 单元测试（302 个 / 22 个文件）
 
 只测纯函数与领域规则，不碰数据库、不 mock 业务分支。
+
+逐文件用例数（`npx vitest run --reporter=json` 统计 `assertionResults.length`，合计 302）：
+
+| 文件 | 用例数 | 文件 | 用例数 |
+| --- | --- | --- | --- |
+| `tests/unit/installer-store.test.ts` | 28 | `tests/unit/backup-retention.test.ts` | 26 |
+| `tests/unit/backup.test.ts` | 26 | `tests/unit/installer-manifest.test.ts` | 20 |
+| `tests/unit/installer-config-writer.test.ts` | 18 | `tests/unit/cron.test.ts` | 17 |
+| `tests/unit/installer-database.test.ts` | 17 | `tests/unit/cursor.test.ts` | 16 |
+| `tests/unit/effective-status.test.ts` | 15 | `tests/unit/period.test.ts` | 14 |
+| `tests/unit/outbound-url.test.ts` | 14 | `tests/unit/installer-state.test.ts` | 13 |
+| `tests/unit/developers-base-urls.test.ts` | 12 | `tests/unit/installer-lock.test.ts` | 12 |
+| `tests/unit/license-key.test.ts` | 10 | `tests/unit/llms.test.ts` | 9 |
+| `tests/unit/deployment-environment.test.ts` | 8 | `tests/unit/signing-key.test.ts` | 8 |
+| `tests/unit/openapi.test.ts` | 7 | `tests/unit/secretbox.test.ts` | 6 |
+| `tests/unit/activation-token.test.ts` | 5 | `tests/unit/openapi-lint.test.ts` | 1 |
 
 ### 2.1 `tests/unit/period.test.ts`（14 个）
 
@@ -79,9 +183,9 @@ product_disabled → revoked → cancelled → suspended → draft
 - 空值/畸形输入 → `reason: "malformed"`；
 - `canonicalChallengeMessage` 五字段换行顺序固定，字段顺序变化则签名不通过。
 
-### 2.5 `tests/unit/backup.test.ts`（15 个，v1.5 新增）
+### 2.5 `tests/unit/backup.test.ts`（26 个，v1.5 新增）
 
-备份模块里不需要数据库就能验证的三块纯逻辑：
+备份模块里不需要数据库就能验证的六块纯逻辑：
 
 加解密（6 个）：
 - 往返后字节完全一致（含 `\u0000` 二进制）；
@@ -103,6 +207,23 @@ product_disabled → revoked → cancelled → suspended → draft
 - 接受 `0 3 * * *`、`*/15 9-17 * * 1-5`；
 - 拒绝 4 段 / 6 段 / 月份写 `MON` / 空串；
 - 保留策略有上下界（`daily` 1–365、`weekly` 0–104、`monthly` 0–120）。
+
+远端对象键 `backupObjectKey`（4 个，防前缀双拼回归）：
+- 有 `remote_prefix` 时只拼一次；
+- 前后斜杠被归一，不产生双斜杠；
+- 没有 `remote_prefix` 时只留文件名，不以斜杠开头；
+- 前缀里出现重复时**不做二次拼**（这就是当年的 bug 形态）。
+
+WebDAV MKCOL 尾斜杠重定向识别（4 个）：
+- 同源、路径相同、只多了尾斜杠 → 视为目录已存在（不算失败）；
+- 跨主机一律拒绝（哪怕路径一模一样，防被 3xx 带去别处）；
+- 同源但路径不同 → 拒绝（不是 `DirectorySlash` 那种情况）；
+- 缺失或非法的 `Location` → 拒绝。
+
+上传重试判定（3 个）：
+- 超时、连接重置、DNS 抖动都算可重试；
+- 服务端明确拒绝不算可重试（重试只会重复失败）；
+- 尝试次数是 2：够覆盖偶发抖动，又不会把作业拖长。
 
 
 ### 2.6 `tests/unit/openapi.test.ts`（7 个，v1.5 新增）
@@ -179,9 +300,23 @@ product_disabled → revoked → cancelled → suspended → draft
 第 12 条特意挑 `valueType === "boolean" && status === "active"` 的**真实功能**（不写死功能编码），
 因为写死编码会让种子数据一改测试就失败，而失败原因看起来像「功能被删了」。
 
-**并发用例的稳定性**：连续执行 6 次，5 次全绿；首次运行出现过 1 次失败后未复现。
-判断为环境偶发（两次请求同一瞬间进入事务、抢锁顺序不同），未定位到确定性代码缺陷，
-保留在测试集中作为回归哨兵。
+**并发用例的稳定性（本轮更正）**：上一版这里写「连续执行 6 次，5 次全绿，判断为环境偶发」。
+本轮复跑后确认**不是偶发，而是对库状态敏感**，且失败形态有两种：
+
+| 库状态 | 结果 | 失败断言 |
+| --- | --- | --- |
+| 干净种子（`npm run db:seed` 之后立刻跑） | 12 passed | — |
+| 已跑过一轮集成/e2e 的脏库 | 1 failed / 11 passed | `expected [ 429, 429 ] to deeply equal [ 201, 409 ]`——上一轮把登录/激活的进程内限流计数打满，两次并发激活都先撞 429 |
+| 再跑一轮 | 4 failed / 8 passed | 上面那条 + `expected null to be 'true'`（`x-idempotent-replay` 头缺失，幂等记录被上一轮的同键请求占用） |
+
+即**用例本身正确**（干净状态下它确实断言 `[201, 409]` 且通过），但它依赖「库与限流窗口都是干净的」这个前提，
+而限流是进程内计数、只有重启服务或等窗口过去才清零。所以：
+
+- 集成测试必须在 `npm run db:seed` 之后、且**服务刚起或窗口已过**时跑；
+- 连跑第二次必然变红，不要把它当回归信号；
+- 本轮在隔离副本（新建库 + 干净种子 + 新起实例）上重跑，稳定 `12 passed (12)`，与主仓库结论一致。
+
+要彻底解决需要把限流/幂等换成 Redis（多实例部署那条已在 8 节列为未验证），不在本轮范围。
 
 **两处为了让测试稳定而改的产品代码**（都是真实改进，不是为测试绕过）：
 
@@ -289,7 +424,7 @@ PHP 就把 Python 的文件当成自己的密钥读了。
 
 ### 4.2 `02-navigation.spec.ts`（2 个）
 
-1. **17 个导航项逐项点击**：断言 URL、h1 可见、没有落到 Next 的 404/错误页，
+1. **16 个导航项逐项点击**：断言 URL、h1 可见、没有落到 Next 的 404/错误页，
    并收集浏览器 console error 与 pageerror，最后断言**数组为空**；
 2. 折叠侧栏 → 只剩图标（按钮名变「展开侧栏」）→ 刷新后仍保持折叠（localStorage 持久化）。
 
@@ -299,7 +434,7 @@ PHP 就把 Python 的文件当成自己的密钥读了。
    校验正则 `^[0-9A-HJKMNP-TV-Z]{6}(-[0-9A-HJKMNP-TV-Z]{6}){4}$` → 用后四位搜索能查到；
 2. 未选产品/客户时提交按钮 `disabled`。
 
-### 4.4 `04-routes.spec.ts`（1 个，覆盖 21 条路由）
+### 4.4 `04-routes.spec.ts`（1 个，覆盖 23 条路由）
 
 **这是本轮新增的用例，起因是一次真实事故**：`/app/products/[id]` 在把接口返回的
 `counts.licenseByStatus`（对象）当成数组 `.map` 时抛
@@ -315,14 +450,15 @@ PHP 就把 Python 的文件当成自己的密钥读了。
    console error 都记入问题清单（只放行登录态探测的 401 与 favicon）；
 4. 最后 `expect(problems).toEqual([])`，失败时把全部问题路由一次列出来。
 
-覆盖：`/app/dashboard`、`/app/products`、`/app/products/[id]`、`/app/customers`、
+覆盖（数组实测 23 条，`grep -c 'path:' tests/e2e/04-routes.spec.ts` 的数组区间内计数）：
+`/app/dashboard`、`/app/products`、`/app/products/[id]`、`/app/customers`、
 `/app/customers/[id]`、`/app/plans`、`/app/features`、`/app/licenses`、`/app/licenses/[id]`、
 `/app/devices`、`/app/developer/{api,credentials,webhooks,webhooks/[id]}`、
 `/app/security/{signing-keys,verification-logs,audit-logs}`、
 `/app/settings/{members,organization,system,profile}`，v1.5 追加
-`/app/settings/backups`，共 22 条。
+`/app/settings/backups`，共 23 条。
 
-另外用 `audit@xinglan.dev`（viewer）手工跑了一遍同样的 17 条导航路由，
+另外用 `audit@xinglan.dev`（viewer）手工跑了一遍同样的 16 条导航路由，
 全部渲染正常、无 white screen，越权页面落到「没有…权限」空态而不是报错。
 
 ### 4.5 `responsive.spec.ts`（2 个，mobile project）
@@ -358,6 +494,35 @@ PHP 就把 Python 的文件当成自己的密钥读了。
 
 实测每次跑都会产生一条 `succeeded` 作业和一条 `passed` 演练（RTO 2–4 秒），
 测试用的目标名带时间戳后缀，重复执行不会撞唯一约束。
+
+### 4.7 纯净种子下的两条失败（本轮实测，未修）
+
+本轮按「先 `npm run db:seed` 再跑」的干净库重跑 `npx playwright test`，结果稳定是
+**14 passed / 2 failed**（16 条里），两条都在 `tests/e2e/05-backups.spec.ts`：
+
+```
+✘ 5.3 被策略引用的目标不允许直接删除  (tests/e2e/05-backups.spec.ts:68)
+   Test timeout of 45000ms exceeded.
+   locator('table').nth(1).locator('tbody tr').first() 一直等不到元素
+
+✘ 5.4 立即备份 → 完整性校验 → 隔离恢复演练  (tests/e2e/05-backups.spec.ts:92)
+   expect(page.getByText(/备份完成/)).toBeVisible({ timeout: 60_000 }) 超时
+```
+
+根因（已定位，不是偶发）：`prisma/seed.ts` **不创建任何备份存储目标与备份策略**
+（`grep -n 'backupStorageDestination\|backupPolicy' prisma/seed.ts` 无命中，
+`select count(*) from backup_storage_destinations` = 0）。而这两条用例的前提是
+「策略表里已经有一个目标」——第 3 条要从策略表取第一个目标名去删，第 4 条要先有目标才能
+点「立即备份」。纯净种子下这个前提不成立，所以必然失败。
+
+为什么以前是绿的：早先那几次是在跑过多轮 e2e 的库上执行的，前一轮用例自己创建的目标残留下来，
+恰好喂饱了这一轮的假设。一旦重灌种子就复现失败。
+
+**本轮不改**（阶段 0 只做文档与实测对账，禁止改测试或 `src/` 业务代码）。两条可选修法留待后续阶段：
+
+1. 给 `prisma/seed.ts` 补一个本地暂存目标 + 一条引用它的策略（改动最小，但会改变「纯净种子」的语义）；
+2. 让用例自己用 `request.post("/api/v1/admin/backups/destinations")` 建前置数据并 `afterAll` 清理
+   （更自洽，测试不依赖种子，但要顺带处理「被策略引用」这条需要真建策略）。
 
 ---
 

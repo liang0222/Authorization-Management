@@ -8,8 +8,10 @@
 
 后台已经可以完整走通「建产品 → 定功能 → 定套餐 → 签授权 → 客户端激活 → 心跳/读权限 →
 续费/暂停/解绑/撤销 → 审计留痕」全链路，并新增「备份与灾备」（多目标备份 → 加密 →
-上传 → 回读校验 → 隔离恢复演练）。类型检查 0 错、构建 88/88、66 单元、11 集成、
-16 端到端全部通过。
+上传 → 回读校验 → 隔离恢复演练）。类型检查 0 错、构建 106/106 静态页、302 单元、
+12 集成、16 端到端（实测 14 过 2 失败，见 2.1 表末两行与第 2.3 节）。
+另有两条**已知缺陷**必须先知道：干净安装后 `npm run build` 会失败（`cpu-features` 原生 addon，
+见 2.2 表末行），2 条备份 E2E 在纯净种子下必失败（见 2.2 表）。
 
 ---
 
@@ -20,10 +22,10 @@
 | 项 | 状态 | 怎么验的 |
 | --- | --- | --- |
 | `npx tsc --noEmit` | 0 错误 | 每批改动后执行 |
-| `npm run build` | 88/88 静态页 | 生产构建实测 |
-| 单元测试 | 66 passed | `npx vitest run`（含备份加解密 / 状态判定 / cron 校验 15 条） |
-| 集成测试 | 11 passed | 真实 HTTP + PostgreSQL |
-| 端到端 | 16 passed | `npx playwright test`（桌面 + Pixel 7，含只读角色 1 条） |
+| `npm run build` | 106/106 静态页 | 生产构建实测（`Generating static pages (106/106)`；路由表 132 条 = 40 ○ + 5 ◐ + 87 ƒ）。**注意：这是现有依赖树的结果**——干净副本上 `npm install`/`npm ci` 后 build 会失败，见 2.2 表「干净安装后 build 必失败」 |
+| 单元测试 | 302 passed (22 files) | `npx vitest run`（含备份加解密 / 状态判定 / cron 校验 / 安装器契约） |
+| 集成测试 | 12 passed | `npx vitest run -c vitest.integration.config.ts`，真实 HTTP + PostgreSQL；**必须干净种子**，脏库会让「并发激活」那条偶发 422 |
+| 端到端 | 16 tests in 7 files，实测 **14 passed / 2 failed** | `npx playwright test`（桌面 + Pixel 7，含只读角色 1 条）。失败的两条是 `tests/e2e/05-backups.spec.ts` 的「被策略引用的目标不允许直接删除」与「立即备份 → 完整性校验 → 隔离恢复演练」——它们假设库里已有备份目标/策略，而 `prisma/seed.ts` 不建备份数据，纯净种子下必然失败（详见第 2.3 节） |
 | 备份全链路 | 16 项冒烟全 PASS | 建目标 → 连接测试 → 建策略 → 立即备份 201 `succeeded` → 回读校验 → 隔离恢复演练 `passed` RTO 3s → 概览统计 → 删除被引用目标 409 |
 | 备份页交互 | 5 条 E2E | 五块真实数据 / 新增目标（含空名称拦截）/ 连接测试 / 删除二次确认 / 被引用拒删 / 立即备份→校验→演练 / 只读账号按钮全禁用且有说明 |
 | 登录 → 签发 → 激活 → 心跳 → 权限 → 解绑 | 全通 | 手工 curl 脚本 + 集成测试双覆盖 |
@@ -43,22 +45,56 @@
 | 多实例部署 | 单实例够用，注释已标注 | 限流与幂等换成 Redis |
 | 真实 Webhook 外发校验 | 无外部接收端 | 起一个本地接收器，验签名头与重试退避 |
 | Firefox / WebKit | 只跑 Chromium | `npx playwright install firefox webkit` 后在 config 加 project |
+| 2 条备份 E2E 在纯净种子下必失败 | 用例假设库里已有备份目标/策略，`prisma/seed.ts` 不建备份数据 | 给 `prisma/seed.ts` 补一个本地暂存目标 + 一条策略，或让用例自己 `request.post` 建前置数据 |
+| `npm run db:reset` 脚本失效 | `prisma migrate reset --force --skip-seed` 在 Prisma 7.10.1 报 `unknown or unexpected option: --skip-seed`（exit 1） | 改成 `prisma migrate reset --force`（会连带跑 seed），或删掉 `--skip-seed` 参数 |
+| **干净安装后 `npm run build` 必失败** | `cpu-features` 是 `ssh2` 的 optionalDependency，带原生 addon `build/Release/cpufeatures.node`；干净 `npm install`/`npm ci` 会装上并编译成功，Turbopack 打包 `ssh2`（经 `src/lib/services/backup/adapters/sftp.ts` → `src/instrumentation.ts`）时报 `non-ecmascript placeable asset`。本机 node_modules 里没有这个包（当初编译失败被跳过）才侥幸能 build | 已试无效：`serverExternalPackages`、`npm install --omit=optional`（会连带移除 `pg` 的 optional 依赖 `pg-cloudflare`，改报 `Module not found: Can't resolve 'pg-cloudflare'`）。未试：`turbopack.rules` 单独标 external、`overrides`/锁文件层面只剔除这一个包。属构建配置改动，不在阶段 0 范围；复现与日志见 [`test-report.md`](test-report.md) 第 1.1 节 |
+
+### 2.3 数字口径（2026-11 实测，复跑即可核对）
+
+| 数字 | 命令 | 实测输出 |
+| --- | --- | --- |
+| 页面 49 | `find src/app -name 'page.tsx' \| wc -l` | 后台 26 + 开发者文档 17 + 认证 3 + 根 1 + `/install` 1 + `/openapi` 1 |
+| API 路由 74 | `find src/app/api -name 'route.ts' \| wc -l` | `api/install` 4 + `api/v1/admin` 54 + `api/v1/auth` 5 + `api/v1` 公开 11 |
+| route handler 82 | `find src/app -name 'route.ts' \| wc -l` | 74 + `developers/` 5 + `/health/live`·`/health/ready`·`/metrics` 3 |
+| 单元 302 / 22 文件 | `npx vitest run` | `Test Files 22 passed (22) / Tests 302 passed (302)` |
+| 集成 12 | `npx vitest run -c vitest.integration.config.ts` | `Tests 12 passed (12)`（先 `npm run db:seed`） |
+| 端到端 16 / 7 文件 | `npx playwright test --list` | `Total: 16 tests in 7 files`；实测 14 passed / 2 failed |
+| 静态页 106 | `npm run build` | `✓ Generating static pages using 3 workers (106/106)` |
+
+> 端到端那 2 条失败是**真实差异**，不是环境噪音：`prisma/seed.ts` 完全不创建
+> `backup_storage_destinations` / `backup_policies`（库里这两张表 0 行），而
+> `tests/e2e/05-backups.spec.ts:68` 要从策略表取第一个目标名、`:84` 要断言「备份完成」。
+> 早期报告写「16 passed」是在**跑过多轮 e2e 的脏库**上得到的——那时库里还留着前一轮建的目标。
+> 修法见 2.2 表的「2 条备份 E2E 在纯净种子下必失败」行，不在本轮范围（阶段 0 只做文档对账，不动测试与种子）。
 
 ---
 
 ## 3. 快速恢复
 
-### 3.1 从零到能登录（5 条命令）
+### 3.1 从零到能登录（6 条命令）
 
 ```bash
 docker start licensing-pg 2>/dev/null || docker run -d --name licensing-pg \
   -e POSTGRES_PASSWORD=licensing_dev_pw -e POSTGRES_USER=licensing \
   -e POSTGRES_DB=licensing -p 55432:5432 postgres:16-alpine
 npm install
+npx prisma generate    # 必须：src/generated/prisma 是生成物、不入库
 npm run db:migrate
 npm run db:seed
 npm run dev            # http://localhost:3000，owner@xinglan.dev / License#2026
 ```
+
+**`npx prisma generate` 为什么必须单独一步**：`prisma/schema.prisma` 的 generator 是
+`provider = "prisma-client"` + `output = "../src/generated/prisma"`，生成物被 `.gitignore`
+排除（`.gitignore` 有 `/src/generated/prisma`），clone 下来仓库里没有这个目录。
+跳过这一步的症状很有欺骗性：
+
+- `npm run typecheck` 报一串 `Cannot find module '@/generated/prisma/...'`；
+- `tests/unit/` 里引到 Prisma 类型的用例直接失败，看起来像「代码坏了」；
+- `npm run build` 可能仍然成功（部分路由不静态求值），于是错误被拖到运行时才炸。
+
+`npm install` 不会替你补这一步：`package.json` 刻意没挂 `postinstall`（避免 CI 上每次
+install 都重复生成）。`Dockerfile` 与 `.github/workflows/ci.yml` 都是显式调用的。
 
 ### 3.2 服务进程管理
 
@@ -93,6 +129,19 @@ npm run e2e                                     # 自己起 3001，需先 build
 
 集成测试会写真实数据（签发、暂停、撤销新的授权），跑多次后库里会多出测试授权。
 需要干净数据就 `npm run db:seed`（会 TRUNCATE 全表后重灌）。
+
+> ⚠️ **`db:seed` 打的是 `LICENSE_DB_URL` 指向的库，默认值就是本地 `licensing` 库**。
+> 它对 `prisma/seed.ts:79` 列的 30 张表先 `TRUNCATE ... RESTART IDENTITY CASCADE` 再重灌，
+> **不是增量**。本机若同时跑着连同一个库的服务实例（例如 3100 的生产实例），灌种子会连它们的
+> 数据一起清掉：`signing_keys` 被换成新生成的 kid，而 `SIGNING_KEY_DIR` 里没有对应私钥文件，
+> 服务随即 `/health/ready` 返 503 `signing_key_unreadable`。跑之前显式换一个专用库：
+>
+> ```bash
+> LICENSE_DB_URL="postgresql://licensing:licensing_dev_pw@127.0.0.1:55432/licensing_scratch?schema=public" \
+>   npm run db:seed
+> ```
+>
+> 本轮阶段 0 就踩了这个坑（详见交付报告）。
 
 ---
 

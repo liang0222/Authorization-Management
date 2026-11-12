@@ -27,17 +27,46 @@ docker run -d --name licensing-pg \
   -p 55432:5432 postgres:16-alpine
 ```
 
-### 1.2 装依赖、建表、灌种子
+### 1.2 装依赖、生成 Prisma Client、建表、灌种子
 
 ```bash
 npm install
+npx prisma generate    # 生成 Prisma Client 到 src/generated/prisma
 npm run db:migrate     # prisma migrate deploy
 npm run db:seed        # 重建演示数据
 ```
 
+> ⚠️ **`npm run db:seed` 是破坏性操作**：`prisma/seed.ts:79` 先对 30 张业务表执行
+> `TRUNCATE ... RESTART IDENTITY CASCADE`，再重灌演示数据——**不是增量，是清空**。
+> 它打的是 `LICENSE_DB_URL` 指向的库，而这个变量的默认值就是本地 `licensing` 库。
+> 如果这台机器上跑着连同一库的服务实例，灌种子会把这些实例的数据一起清掉
+> （症状之一：`signing_keys` 变成新生成的 kid，服务读不到对应私钥，`/health/ready` 返 503
+> `signing_key_unreadable`）。跑之前务必显式指定一个**专用库**，例如：
+>
+> ```bash
+> LICENSE_DB_URL="postgresql://licensing:licensing_dev_pw@127.0.0.1:55432/licensing_scratch?schema=public" \
+>   npm run db:seed
+> ```
+>
+> 集成测试与 e2e 同理，别对着有数据的库跑。
+
+> **`npx prisma generate` 不能省。** `src/generated/prisma/` 是生成物，已写进 `.gitignore`，
+> 仓库里没有它。缺这一步时 `npm run typecheck` 会报一片「找不到模块 `@/generated/prisma`」，
+> `tests/unit/` 里引到 Prisma 类型的用例也会失败——看起来像代码坏了，实际只是没生成。
+> 本项目刻意没挂 `postinstall` 自动跑（避免 CI 上重复生成），必须显式执行。
+
 > **数据库连接串**：本项目用自有变量 `LICENSE_DB_URL`（默认值已指向上面的本地容器），
 > 刻意不使用通用的 `DATABASE_URL`——本机存在其它项目的 `.env`，用通用名会被污染成
 > 别处的数据库地址。要改地址就设 `LICENSE_DB_URL`。
+
+> **已知缺陷（2026-11 实测，未修）**：干净环境里 `npm install` 之后 `npm run build` 会失败，
+> 报 `./node_modules/cpu-features/lib/index.js  Error: non-ecmascript placeable asset`。
+> 该包是 `ssh2` 的 optionalDependency，带原生 addon，Turbopack 打包 `ssh2`（SFTP 备份适配器 →
+> `src/instrumentation.ts`）时踩到它。本机 `node_modules` 里恰好没有这个包，所以构建能过。
+> `typecheck` / `test` / 集成测试不受影响（干净副本上实测 0 错、302 单元、12 集成全绿）。
+> 临时绕过：删掉 `node_modules/cpu-features` 再 build；`serverExternalPackages` 与
+> `--omit=optional` 都实测无效（后者会连带移除 `pg-cloudflare`）。
+> 复现步骤与完整报错见 [`docs/test-report.md`](docs/test-report.md) 第 1.1 节。
 
 ### 1.3 起服务
 
@@ -59,13 +88,21 @@ npm run dev            # http://localhost:3000
 
 ```bash
 npm run typecheck                              # tsc --noEmit
-npm run test                                   # 75 个单元测试（7 个文件）
+npm run test                                   # 302 个单元测试（22 个文件）
 npx vitest run -c vitest.integration.config.ts # 12 个集成测试（需 dev/prod 服务 + 种子数据）
 npm run e2e                                    # 16 个端到端（自带 next start -p 3001）
 
 # 六语言 SDK 示例联调（Python / Node / PHP / Go / Java / C#，见 sdk-examples/README.md）
 LICENSE_KEY=<授权码> LICENSE_PRODUCT_ID=<产品 UUID> node sdk-examples/verify.mjs
 ```
+
+> 上面四个数量都是**实跑值**，口径与复现命令：
+> 单元 `npx vitest run` → `Test Files 22 passed (22) / Tests 302 passed (302)`；
+> 集成 `npx vitest run -c vitest.integration.config.ts` → `Tests 12 passed (12)`（先 `npm run db:seed`，
+> 脏库会让并发那条偶发失败）；端到端 `npx playwright test --list` → `Total: 16 tests in 7 files`。
+> 端到端 16 条里有 2 条（`tests/e2e/05-backups.spec.ts` 的「被策略引用的目标不允许直接删除」与
+> 「立即备份 → 完整性校验 → 隔离恢复演练」）依赖库里已存在备份目标/策略，而 `prisma/seed.ts`
+> 不建备份数据，纯净种子下必然失败——见 [`docs/test-report.md`](docs/test-report.md) 第 4 节。
 
 ---
 
@@ -128,9 +165,22 @@ LICENSE_KEY=<授权码> LICENSE_PRODUCT_ID=<产品 UUID> node sdk-examples/verif
    └─ /app/settings/profile          个人设置（资料/改密/MFA）
 ```
 
-共 46 个页面路由（后台 26 + 开发者文档 16 + 认证 3 + 根重定向 1）、
-76 个 API 路由（管理 52 / 认证 5 / 公开协议 10 / 开发者文档 5 / 运维与健康检查 3 / Prometheus 指标 1），
-其中备份与灾备占 12 个管理路由、公开协议里含 4 个 v1.5 新增端点。
+共 49 个页面路由、74 个 API 路由、82 个 route handler（含开发者文档与运维端点），
+其中备份与灾备占 12 个管理路由、公开协议里含 4 个 v1.5 新增端点
+（`GET /v1/activations/{id}`、`POST /v1/server/licenses/check`、`POST /v1/offline-grants`、`POST /v1/oauth/token`）。
+
+统计口径（2026-11 实测，命令可直接复跑）：
+
+| 数字 | 口径 | 命令 |
+| --- | --- | --- |
+| 49 个页面 | 全部 `page.tsx`：后台 `app/` 26 + 开发者文档 `developers/` 17 + 认证 `(auth)/` 3 + 根重定向 1 + `/install` 1 + `/openapi` 1 | `find src/app -name 'page.tsx' \| wc -l` |
+| 74 个 API 路由 | `src/app/api/` 下全部 `route.ts`：`api/install` 4 + `api/v1/admin` 54 + `api/v1/auth` 5 + `api/v1` 公开 11 | `find src/app/api -name 'route.ts' \| wc -l` |
+| 82 个 route handler | 上面 74 + `developers/` 5 个静态文档 route + `/health/live`、`/health/ready`、`/metrics` 3 个 | `find src/app -name 'route.ts' \| wc -l` |
+| 12 个备份路由 | `src/app/api/v1/admin/backups/**` | `find src/app/api/v1/admin/backups -name 'route.ts' \| wc -l` |
+
+> 注：`/install` 与 `/openapi` 是 v1.5 后加的页面（安装器与在线契约浏览），早期那一版
+> 页面口径只算了「后台 26 + 开发者 16 + 认证 3 + 根 1」，既漏掉这两个，也漏掉
+> `developers/` 后续新增的 `/developers/openapi` 一页，所以对不上。
 
 ### 3.1 部署形态
 
@@ -182,7 +232,7 @@ src/
 ├─ app/
 │  ├─ (auth)/                 登录、忘记密码、重置密码
 │  ├─ app/                    后台（layout 为 AppShell）
-│  └─ api/v1/                 66 个 route handler
+│  └─ api/v1/                 70 个 route handler（另 api/install 4 个）
 │     ├─ auth/                登录、登出、会话、找回/重置密码
 │     ├─ admin/               管理接口（全部 withAdmin + RBAC）
 │     └─ (根)                 公开客户端接口
@@ -209,9 +259,9 @@ prisma/
 └─ seed.ts                    演示数据
 sdk-examples/                 六语言可运行示例 + verify.mjs（Preview，非已发布 SDK）
 tests/
-├─ unit/                      75 个纯函数与契约测试（7 个文件）
+├─ unit/                      302 个纯函数与契约测试（22 个文件）
 ├─ integration/               12 个真实 HTTP + DB 测试
-└─ e2e/                       16 个 Playwright 用例（6 个文件）
+└─ e2e/                       16 个 Playwright 用例（7 个文件，含 setup）
 docs/                         交付文档（见下）
 ```
 
