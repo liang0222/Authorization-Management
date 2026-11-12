@@ -13,7 +13,7 @@ import {
   MANIFEST_VERSION,
   type FieldDescriptor,
   type ProjectManifest,
-} from "@/lib/installer/contract";
+} from "./contract";
 
 const fieldOptionSchema = z.object({
   value: z.string().min(1),

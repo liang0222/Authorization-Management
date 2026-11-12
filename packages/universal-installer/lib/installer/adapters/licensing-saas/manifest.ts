@@ -6,7 +6,7 @@
  *
  * 注意：任何 secret 字段都不允许带默认值，validateManifest() 会拦。
  */
-import type { ProjectManifest } from "@/lib/installer/contract";
+import type { ProjectManifest } from "../../contract";
 
 export const LICENSING_SAAS_PROJECT_ID = "licensing-saas";
 

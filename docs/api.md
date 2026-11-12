@@ -2,15 +2,17 @@
 
 后台前端与客户端 SDK 共用的 HTTP 契约。全部路由在 `src/app/api/v1/`，共 70 个 route handler
 （管理 54 / 认证 5 / 公开协议 11）；
-另有 `src/app/api/install/` 的 4 个安装器 route、5 个 `src/app/developers/*` 的静态文档 route
-（llms / openapi / ai 提示词）与 `/health/live`、`/health/ready`、`/metrics` 3 个运维端点，
-全仓 route handler 合计 82 个。
+另有 5 个 `src/app/developers/*` 的静态文档 route（llms / openapi / ai 提示词）与
+`/health/live`、`/health/ready`、`/metrics` 3 个运维端点，全仓 route handler 合计 78 个。
+
+> 安装器的 4 个 route（`api/install/{state,probe,run,log}`）已在阶段 3 移出本仓库，
+> 现在在 `packages/universal-installer/app/api/install/`，不再计入本契约的统计口径。
 
 统计口径（实测，可直接复跑）：`find src/app/api/v1 -name 'route.ts' | wc -l` → 70；
 `find src/app/api/v1/admin -name 'route.ts' | wc -l` → 54；
 `find src/app/api/v1/auth -name 'route.ts' | wc -l` → 5；
 `find src/app/api/v1 -name 'route.ts' -not -path '*/admin/*' -not -path '*/auth/*' | wc -l` → 11；
-`find src/app -name 'route.ts' | wc -l` → 82。
+`find src/app -name 'route.ts' | wc -l` → 78。
 
 - 管理接口前缀：`/api/v1/admin/*`（需登录 + RBAC）
 - 认证接口前缀：`/api/v1/auth/*`

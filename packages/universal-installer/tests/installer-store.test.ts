@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { canRunInstall } from "@/lib/installer/state";
+import { canRunInstall } from "../lib/installer/state";
 import {
   appendLog,
   atomicWrite,
@@ -17,7 +17,7 @@ import {
   resetProjectState,
   writeLock,
   writeState,
-} from "@/lib/installer/store";
+} from "../lib/installer/store";
 
 let dir: string;
 

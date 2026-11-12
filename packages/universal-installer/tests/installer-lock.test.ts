@@ -8,7 +8,7 @@ import {
   isStale,
   readInstallLock,
   STALE_MS,
-} from "@/lib/installer/lock";
+} from "../lib/installer/lock";
 
 let dir: string;
 

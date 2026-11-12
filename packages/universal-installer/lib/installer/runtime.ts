@@ -5,13 +5,13 @@
  * 通用核心（store/state/lock/orchestrator…）不认识 Next.js，也不该认识。
  */
 import { join } from "node:path";
-import { config } from "@/lib/config";
-import { LicensingSaasAdapter } from "@/lib/installer/adapters/licensing-saas";
-import { licensingSaasManifest, LICENSING_SAAS_PROJECT_ID } from "@/lib/installer/adapters/licensing-saas/manifest";
-import { readSnapshot } from "@/lib/installer/orchestrator";
-import { dataRoot, readLock } from "@/lib/installer/store";
-import { probeEnvironment } from "@/lib/installer/env-probe";
-import type { CheckItem, InstallSnapshot, ProjectManifest } from "@/lib/installer/contract";
+import { hostDatabaseUrl } from "../../host/database-url";
+import { LicensingSaasAdapter } from "./adapters/licensing-saas";
+import { licensingSaasManifest, LICENSING_SAAS_PROJECT_ID } from "./adapters/licensing-saas/manifest";
+import { readSnapshot } from "./orchestrator";
+import { dataRoot, readLock } from "./store";
+import { probeEnvironment } from "./env-probe";
+import type { CheckItem, InstallSnapshot, ProjectManifest } from "./contract";
 
 /** 项目根：Next.js 进程的 cwd（systemd 的 WorkingDirectory）。 */
 export function projectDir(): string {
@@ -54,7 +54,7 @@ const GATE_TTL_MS = 5000;
  */
 export async function readInstallGate(force = false): Promise<InstallSnapshot> {
   const dir = installDataDir();
-  const databaseUrl = config.databaseUrl;
+  const databaseUrl = hostDatabaseUrl();
 
   if (readLock(dir)) {
     return readSnapshot({ adapter: adapter(), projectDir: projectDir(), databaseUrl });

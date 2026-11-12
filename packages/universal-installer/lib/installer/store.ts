@@ -34,9 +34,9 @@ import type {
   InstallSnapshot,
   InstallState,
   StateSource,
-} from "@/lib/installer/contract";
-import { INSTALLER_VERSION } from "@/lib/installer/contract";
-import { assertTransition } from "@/lib/installer/state";
+} from "./contract";
+import { INSTALLER_VERSION } from "./contract";
+import { assertTransition } from "./state";
 
 export const DEFAULT_DATA_ROOT = "/var/lib/universal-installer";
 

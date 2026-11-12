@@ -7,8 +7,8 @@ import {
   assertTransition,
   isInstallLocked,
   TRANSITIONS,
-} from "@/lib/installer/state";
-import type { InstallState } from "@/lib/installer/contract";
+} from "../lib/installer/state";
+import type { InstallState } from "../lib/installer/contract";
 
 const ALL: InstallState[] = [
   "UNINSTALLED",

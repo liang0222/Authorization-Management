@@ -1,0 +1,19 @@
+-- 阶段 3：installer_records 的归属从授权系统移交给 packages/universal-installer/。
+--
+-- 这是一条**故意什么都不做**的迁移。
+--
+-- 为什么没有 DDL：
+--   1. 表与数据必须原样保留。Prisma 按 schema 差异自动生成的迁移会带
+--      `DROP TABLE "installer_records";`——那会把已部署实例里的安装记录清掉，
+--      属于「只改代码归属、不动数据」这条硬要求的直接违反。
+--   2. 授权系统的 Prisma schema 里已经删掉 model installer_records（应用不再读写它），
+--      但表本身由安装器继续持有与维护，见：
+--        packages/universal-installer/database/installer_records.sql
+--   3. 迁移历史里 20261104120000_installer_records 仍然建这张表，
+--      所以全新库跑完 migrate deploy 一样会得到它，不需要在这里重建。
+--
+-- 因此本文件只登记「这次拆分的意图」，不执行任何语句。
+-- 验证方式：SELECT count(*) FROM installer_records; 迁移前后必须一致。
+--
+-- 回滚：代码层回滚即可（见 docs/handoff.md §4）。数据库层无需回滚——
+-- 本迁移没有改过任何东西。

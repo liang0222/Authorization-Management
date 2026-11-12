@@ -5,10 +5,10 @@ import {
   parseSemver,
   satisfiesRange,
   validateManifest,
-} from "@/lib/installer/manifest";
-import { licensingSaasManifest } from "@/lib/installer/adapters/licensing-saas/manifest";
-import { CONTRACT_VERSION, INSTALLER_VERSION } from "@/lib/installer/contract";
-import type { ProjectManifest } from "@/lib/installer/contract";
+} from "../lib/installer/manifest";
+import { licensingSaasManifest } from "../lib/installer/adapters/licensing-saas/manifest";
+import { CONTRACT_VERSION, INSTALLER_VERSION } from "../lib/installer/contract";
+import type { ProjectManifest } from "../lib/installer/contract";
 
 /** 深拷贝，避免用例之间互相污染。 */
 function clone(): ProjectManifest {

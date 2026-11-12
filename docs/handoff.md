@@ -8,7 +8,7 @@
 
 后台已经可以完整走通「建产品 → 定功能 → 定套餐 → 签授权 → 客户端激活 → 心跳/读权限 →
 续费/暂停/解绑/撤销 → 审计留痕」全链路，并新增「备份与灾备」（多目标备份 → 加密 →
-上传 → 回读校验 → 隔离恢复演练）。类型检查 0 错、构建 106/106 静态页、335 单元、
+上传 → 回读校验 → 隔离恢复演练）。类型检查 0 错、构建 101/101 静态页、227 单元（另有安装器 108 条在包内）、
 12 集成、16 端到端（实测 14 过 2 失败，见 2.1 表末两行与第 2.3 节）。
 另有**一条已知缺陷**必须先知道：2 条备份 E2E 在纯净种子下必失败（见 2.2 表）。
 （原先「干净安装后 build 必失败」那条已在阶段 0.5 修复：`turbopack.resolveAlias` 把 `cpu-features`
@@ -28,8 +28,8 @@
 | 项 | 状态 | 怎么验的 |
 | --- | --- | --- |
 | `npx tsc --noEmit` | 0 错误 | 每批改动后执行 |
-| `npm run build` | 106/106 静态页 | 生产构建实测（`Generating static pages (106/106)`；路由表 132 条 = 40 ○ + 5 ◐ + 87 ƒ）。**干净副本 `npm ci` 后同样通过**（阶段 0.5 修复后实测，见 2.2 表末行） |
-| 单元测试 | 335 passed (26 files) | `npx vitest run`（含备份加解密 / 状态判定 / cron 校验 / 安装器契约 / 启动闸门四组合 / seed 护栏与 `check:prod-env` 判定 / 演示账号检测） |
+| `npm run build` | 101/101 静态页 | 生产构建实测（`Generating static pages (101/101)`；路由表 127 条）。**干净副本 `npm ci` 后同样通过**（阶段 0.5 修复后实测，见 2.2 表末行）。静态页与路由数比阶段 2 少 5，是阶段 3 把 `/install` 与 `/api/install/*` 移出本仓库，不是功能丢失 |
+| 单元测试 | 227 passed (20 files) | `npx vitest run`（含备份加解密 / 状态判定 / cron 校验 / 启动闸门四组合 / seed 护栏与 `check:prod-env` 判定 / 演示账号检测）。阶段 3 把 6 个安装器测试文件（108 条）移到 `packages/universal-installer/tests/`，用 `npm run test:installer` 跑，仍全绿 |
 | 集成测试 | 12 passed | `npx vitest run -c vitest.integration.config.ts`，真实 HTTP + PostgreSQL；**必须干净种子**，脏库会让「并发激活」那条偶发 422 |
 | 端到端 | 16 tests in 7 files，实测 **14 passed / 2 failed** | `npx playwright test`（桌面 + Pixel 7，含只读角色 1 条）。失败的两条是 `tests/e2e/05-backups.spec.ts` 的「被策略引用的目标不允许直接删除」与「立即备份 → 完整性校验 → 隔离恢复演练」——它们假设库里已有备份目标/策略，而 `prisma/seed.ts` 不建备份数据，纯净种子下必然失败（详见第 2.3 节） |
 | 备份全链路 | 16 项冒烟全 PASS | 建目标 → 连接测试 → 建策略 → 立即备份 201 `succeeded` → 回读校验 → 隔离恢复演练 `passed` RTO 3s → 概览统计 → 删除被引用目标 409 |
@@ -68,19 +68,65 @@
 
 | 数字 | 命令 | 实测输出 |
 | --- | --- | --- |
-| 页面 49 | `find src/app -name 'page.tsx' \| wc -l` | 后台 26 + 开发者文档 17 + 认证 3 + 根 1 + `/install` 1 + `/openapi` 1 |
-| API 路由 74 | `find src/app/api -name 'route.ts' \| wc -l` | `api/install` 4 + `api/v1/admin` 54 + `api/v1/auth` 5 + `api/v1` 公开 11 |
-| route handler 82 | `find src/app -name 'route.ts' \| wc -l` | 74 + `developers/` 5 + `/health/live`·`/health/ready`·`/metrics` 3 |
-| 单元 335 / 26 文件 | `npx vitest run` | `Test Files 26 passed (26) / Tests 335 passed (335)` |
+| 页面 48 | `find src/app -name 'page.tsx' \| wc -l` | 后台 26 + 开发者文档 17 + 认证 3 + 根 1 + `/openapi` 1（`/install` 已随阶段 3 移出） |
+| API 路由 70 | `find src/app/api -name 'route.ts' \| wc -l` | `api/v1/admin` 54 + `api/v1/auth` 5 + `api/v1` 公开 11（`api/install` 4 个已移出） |
+| route handler 78 | `find src/app -name 'route.ts' \| wc -l` | 70 + `developers/` 5 + `/health/live`·`/health/ready`·`/metrics` 3 |
+| 单元 227 / 20 文件 | `npx vitest run` | `Test Files 20 passed (20) / Tests 227 passed (227)`；另有 `npm run test:installer` → `Test Files 6 passed (6) / Tests 108 passed (108)` |
 | 集成 12 | `npx vitest run -c vitest.integration.config.ts` | `Tests 12 passed (12)`（先 `npm run db:seed`） |
 | 端到端 16 / 7 文件 | `npx playwright test --list` | `Total: 16 tests in 7 files`；实测 14 passed / 2 failed |
-| 静态页 106 | `npm run build` | `✓ Generating static pages using 3 workers (106/106)` |
+| 静态页 101 | `npm run build` | `✓ Generating static pages using 3 workers (101/101)` |
 
 > 端到端那 2 条失败是**真实差异**，不是环境噪音：`prisma/seed.ts` 完全不创建
 > `backup_storage_destinations` / `backup_policies`（库里这两张表 0 行），而
 > `tests/e2e/05-backups.spec.ts:68` 要从策略表取第一个目标名、`:84` 要断言「备份完成」。
 > 早期报告写「16 passed」是在**跑过多轮 e2e 的脏库**上得到的——那时库里还留着前一轮建的目标。
 > 修法见 2.2 表的「2 条备份 E2E 在纯净种子下必失败」行，不在本轮范围（阶段 0 只做文档对账，不动测试与种子）。
+
+### 2.4 安装器拆分（阶段 3）
+
+**拆分范围**
+
+| 原位置（宿主） | 现在 | 说明 |
+| --- | --- | --- |
+| `src/lib/installer/**` | `packages/universal-installer/lib/installer/**` | 契约、状态机、锁、存储、迁移、探测、配置写入、编排器、适配器 |
+| `src/components/install/**` | `packages/universal-installer/components/install/**` | 向导 UI 与文案字典 |
+| `src/app/install/**` | `packages/universal-installer/app/install/**` | 安装页；宿主的构建产物里已没有这条路由 |
+| `src/app/api/install/**`（4 个 route） | `packages/universal-installer/app/api/install/**` | `state` / `probe` / `run` / `log` |
+| `tests/unit/installer-*.test.ts`（6 文件 108 条） | `packages/universal-installer/tests/` | 用 `npm run test:installer` 跑，仍全绿 |
+| `prisma/schema.prisma` 的 `model installer_records` | 删除 | **只删模型定义，表与数据保留**；表定义改由包内 `database/installer_records.sql` 持有 |
+
+- 宿主与包的耦合只剩 `packages/universal-installer/host/` 四个文件（`password.ts`、`permissions.ts`、
+  `database-url.ts` 各是逐字副本/规则抄录并注明来源；`prisma-client.ts` 是唯一指向宿主生成物的一行相对 import）。
+  包内不再 import 宿主的 `src/lib` 业务模块（`grep '"@/' packages/universal-installer` 为空）。
+- 后台任务与安装器解耦：`src/lib/background.ts` 的开关改成查数据库（`to_regclass('public.webhook_deliveries')`、
+  `to_regclass('public.backup_policies')`），不再读 `<dataRoot>/licensing-saas/installed.lock`；
+  `src/instrumentation.ts` 按这个结果决定是否启动 dispatcher / scheduler，未就绪时打
+  `[boot] 后台任务未启动：<原因>`。`src/proxy.ts` 与 `src/app/page.tsx` 也不再按安装状态分流，`/` 恒去 `/app/dashboard`。
+
+**部署影响**
+
+- 构建产物少 5 条路由：`/install` 页面 + `/api/install/{state,probe,run,log}`；页面 49→48、API 路由 74→70、
+  route handler 82→78、静态页 106→101、路由表 132→127（阶段 3 实测）。
+- **数据库不需要任何 DDL**：`20261113000000_installer_records_handoff` 是纯注释的空迁移（0 条 SQL），
+  Prisma 会把「模型已删除」登记为空迁移而不是 `DROP TABLE`。已部署库的 `installer_records` 行数与内容不变
+  （实测：3 行、内容 md5 前后一致 `ac0ec532e254f795c880629ce01edc08`，索引 `installer_records_pkey` /
+  `installer_records_project_id_key` 仍在）。
+- 全新库也能建出该表：历史迁移 `20261104120000_installer_records` 仍会 `CREATE TABLE`，
+  所以空迁移在全新库上同样安全（实测 `prisma migrate deploy` 全绿）。
+- 部署侧动作：`npm ci && npx prisma generate && npm run build && systemctl restart licensing-saas`。
+  备份的 SFTP 适配器仍用 `ssh2`，所以阶段 0.5 的 `cpu-features` 构建期替身继续保留，别删。
+- 升级后 `/install` 会 404（不再挂载）；如果某个部署流程还在访问它，改成在 `packages/universal-installer` 里单独跑。
+
+**回滚**
+
+1. 代码：`git revert <阶段3 提交>`（两步各一个提交，可分别回滚）。回滚 `d38c077` 会恢复「后台任务看安装锁 + `/` 按安装状态分流」的旧行为。
+2. 数据：**无需回滚**——`installer_records` 从未被改动。若将来真的要把模型加回 `schema.prisma`，
+   直接用 `packages/universal-installer/database/installer_records.sql` 对照，表结构完全一致。
+3. 运行：回滚后重新 `npm ci && npx prisma generate && npm run build`，重启服务即可；不需要碰数据库。
+
+**独立成仓剩余工作**见 [`packages/universal-installer/README.md`](../packages/universal-installer/README.md) 第五节（7 条：
+换掉 `host/prisma-client.ts` 的相对 import、宿主项目假设抽成描述文件、打包与版本/LICENCE、独立 CI、
+安装页承载方式、`installer_records.sql` 接入编排器、两端文档口径）。
 
 ---
 

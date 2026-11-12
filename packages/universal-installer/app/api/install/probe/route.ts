@@ -6,10 +6,10 @@
  */
 import { NextResponse } from "next/server";
 import { connection } from "next/server";
-import { canRunInstall } from "@/lib/installer/state";
-import { envelope, failure, guardInstallPost } from "@/lib/installer/guard";
-import { adapter, installDataDir, readInstallGate } from "@/lib/installer/runtime";
-import type { InstallerConfigInput } from "@/lib/installer/contract";
+import { canRunInstall } from "../../../../lib/installer/state";
+import { envelope, failure, guardInstallPost } from "../../../../lib/installer/guard";
+import { adapter, installDataDir, readInstallGate } from "../../../../lib/installer/runtime";
+import type { InstallerConfigInput } from "../../../../lib/installer/contract";
 
 export const instant = false;
 

@@ -13,7 +13,7 @@
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
-import { atomicWrite, redact } from "@/lib/installer/store";
+import { atomicWrite, redact } from "./store";
 
 export interface ConfigWriteRequest {
   /** 目标 env 文件绝对路径。 */

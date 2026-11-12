@@ -16,7 +16,7 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "@/generated/prisma/client";
+import { PrismaClient } from "../../../../host/prisma-client";
 import type {
   AdapterContext,
   AdminResult,
@@ -33,16 +33,16 @@ import type {
   ProjectManifest,
   ValidationIssue,
   ValidationResult,
-} from "@/lib/installer/contract";
-import { describeTarget, inspectDatabase, parseDatabaseUrl, testDatabaseConnection } from "@/lib/installer/database";
-import { runPrismaMigrate } from "@/lib/installer/migrations";
-import { hashPassword, passwordPolicyIssues } from "@/lib/auth/password";
-import { ALL_PERMISSION_CODES, PERMISSIONS, ROLE_PRESETS } from "@/lib/domain/permissions";
+} from "../../contract";
+import { describeTarget, inspectDatabase, parseDatabaseUrl, testDatabaseConnection } from "../../database";
+import { runPrismaMigrate } from "../../migrations";
+import { hashPassword, passwordPolicyIssues } from "../../../../host/password";
+import { ALL_PERMISSION_CODES, PERMISSIONS, ROLE_PRESETS } from "../../../../host/permissions";
 
 /** 权限码 → 中文说明，直接取自项目自己的权限表，不另维护一份文案。 */
 const PERMISSION_DESCRIPTIONS = new Map(PERMISSIONS.map((p) => [p.code, p.description]));
-import { licensingSaasManifest, LICENSING_SAAS_PROJECT_ID } from "@/lib/installer/adapters/licensing-saas/manifest";
-import { resolveDatabaseUrl } from "@/lib/installer/orchestrator";
+import { licensingSaasManifest, LICENSING_SAAS_PROJECT_ID } from "./manifest";
+import { resolveDatabaseUrl } from "../../orchestrator";
 
 /** Ed25519 SPKI DER 固定前缀（与 signing-keys 路由保持一致）。 */
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
@@ -507,32 +507,32 @@ export class LicensingSaasAdapter implements InstallerAdapter {
   /**
    * 把安装记录写进本项目自己的库。幂等：project_id 有唯一约束，
    * 重复安装尝试只会更新同一行（恢复场景会重放这一步）。
+   *
+   * 阶段 3 起改用原生 SQL：`installer_records` 已从宿主的 Prisma schema 里移除
+   * （表还在、数据保留，归属本包），所以 `db.installer_records` 这个模型句柄不存在了。
+   * 表结构见 `packages/universal-installer/database/installer_records.sql`。
    */
   async recordInstall(ctx: AdapterContext, record: InstallRecord): Promise<void> {
+    const detail = JSON.stringify(record.detail ?? {});
     await withPrisma(ctx.databaseUrl, async (db) => {
-      await db.installer_records.upsert({
-        where: { project_id: record.projectId },
-        create: {
-          project_id: record.projectId,
-          project_version: record.projectVersion,
-          installer_version: record.installerVersion,
-          adapter: record.adapter,
-          manifest_sha256: record.manifestSha256,
-          installed_by: record.installedBy ?? null,
-          attempt_id: record.attemptId,
-          detail: (record.detail ?? {}) as never,
-        },
-        update: {
-          project_version: record.projectVersion,
-          installer_version: record.installerVersion,
-          adapter: record.adapter,
-          manifest_sha256: record.manifestSha256,
-          installed_by: record.installedBy ?? null,
-          attempt_id: record.attemptId,
-          detail: (record.detail ?? {}) as never,
-          installed_at: new Date(),
-        },
-      });
+      await db.$executeRaw`
+        INSERT INTO installer_records (
+          project_id, project_version, installer_version, adapter,
+          manifest_sha256, installed_by, attempt_id, detail
+        ) VALUES (
+          ${record.projectId}, ${record.projectVersion}, ${record.installerVersion}, ${record.adapter},
+          ${record.manifestSha256}, ${record.installedBy ?? null}, ${record.attemptId}, ${detail}::jsonb
+        )
+        ON CONFLICT (project_id) DO UPDATE SET
+          project_version   = EXCLUDED.project_version,
+          installer_version = EXCLUDED.installer_version,
+          adapter           = EXCLUDED.adapter,
+          manifest_sha256   = EXCLUDED.manifest_sha256,
+          installed_by      = EXCLUDED.installed_by,
+          attempt_id        = EXCLUDED.attempt_id,
+          detail            = EXCLUDED.detail,
+          installed_at      = now()
+      `;
     });
   }
 }

@@ -22,8 +22,8 @@ import type {
   InstallState,
   ProjectManifest,
   StepRecord,
-} from "@/lib/installer/contract";
-import { dictionaryFor } from "@/components/install/i18n";
+} from "../../lib/installer/contract";
+import { dictionaryFor } from "./i18n";
 
 type WizardStep = "admin" | "database" | "system" | "review" | "run" | "done";
 

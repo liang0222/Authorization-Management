@@ -8,8 +8,8 @@ import { accessSync, constants, readFileSync, statfsSync, statSync } from "node:
 import { cpus, freemem, hostname, platform, release, totalmem } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
-import type { CheckItem } from "@/lib/installer/contract";
-import { parseSemver, satisfiesRange } from "@/lib/installer/manifest";
+import type { CheckItem } from "./contract";
+import { parseSemver, satisfiesRange } from "./manifest";
 
 export interface ProbeOptions {
   projectDir: string;

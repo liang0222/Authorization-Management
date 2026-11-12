@@ -13,7 +13,7 @@
 import { spawn } from "node:child_process";
 import { mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { withClient } from "@/lib/installer/database";
+import { withClient } from "./database";
 
 export interface CommandResult {
   code: number | null;

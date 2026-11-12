@@ -91,7 +91,8 @@ npm run dev            # http://localhost:3000
 
 ```bash
 npm run typecheck                              # tsc --noEmit
-npm run test                                   # 302 个单元测试（22 个文件）
+npm run test                                   # 227 个单元测试（20 个文件）
+npm run test:installer                         # 108 个安装器单元测试（包内自跑，6 个文件）
 npx vitest run -c vitest.integration.config.ts # 12 个集成测试（需 dev/prod 服务 + 种子数据）
 npm run e2e                                    # 16 个端到端（自带 next start -p 3001）
 
@@ -168,7 +169,7 @@ LICENSE_KEY=<授权码> LICENSE_PRODUCT_ID=<产品 UUID> node sdk-examples/verif
    └─ /app/settings/profile          个人设置（资料/改密/MFA）
 ```
 
-共 49 个页面路由、74 个 API 路由、82 个 route handler（含开发者文档与运维端点），
+共 48 个页面路由、70 个 API 路由、78 个 route handler（含开发者文档与运维端点），
 其中备份与灾备占 12 个管理路由、公开协议里含 4 个 v1.5 新增端点
 （`GET /v1/activations/{id}`、`POST /v1/server/licenses/check`、`POST /v1/offline-grants`、`POST /v1/oauth/token`）。
 
@@ -176,14 +177,18 @@ LICENSE_KEY=<授权码> LICENSE_PRODUCT_ID=<产品 UUID> node sdk-examples/verif
 
 | 数字 | 口径 | 命令 |
 | --- | --- | --- |
-| 49 个页面 | 全部 `page.tsx`：后台 `app/` 26 + 开发者文档 `developers/` 17 + 认证 `(auth)/` 3 + 根重定向 1 + `/install` 1 + `/openapi` 1 | `find src/app -name 'page.tsx' \| wc -l` |
-| 74 个 API 路由 | `src/app/api/` 下全部 `route.ts`：`api/install` 4 + `api/v1/admin` 54 + `api/v1/auth` 5 + `api/v1` 公开 11 | `find src/app/api -name 'route.ts' \| wc -l` |
-| 82 个 route handler | 上面 74 + `developers/` 5 个静态文档 route + `/health/live`、`/health/ready`、`/metrics` 3 个 | `find src/app -name 'route.ts' \| wc -l` |
+| 48 个页面 | 全部 `page.tsx`：后台 `app/` 26 + 开发者文档 `developers/` 17 + 认证 `(auth)/` 3 + 根重定向 1 + `/openapi` 1（安装器的 `/install` 已随阶段 3 移出） | `find src/app -name 'page.tsx' \| wc -l` |
+| 70 个 API 路由 | `src/app/api/` 下全部 `route.ts`：`api/v1/admin` 54 + `api/v1/auth` 5 + `api/v1` 公开 11（`api/install` 4 个已移出） | `find src/app/api -name 'route.ts' \| wc -l` |
+| 78 个 route handler | 上面 70 + `developers/` 5 个静态文档 route + `/health/live`、`/health/ready`、`/metrics` 3 个 | `find src/app -name 'route.ts' \| wc -l` |
 | 12 个备份路由 | `src/app/api/v1/admin/backups/**` | `find src/app/api/v1/admin/backups -name 'route.ts' \| wc -l` |
 
-> 注：`/install` 与 `/openapi` 是 v1.5 后加的页面（安装器与在线契约浏览），早期那一版
-> 页面口径只算了「后台 26 + 开发者 16 + 认证 3 + 根 1」，既漏掉这两个，也漏掉
-> `developers/` 后续新增的 `/developers/openapi` 一页，所以对不上。
+> 注 1：`/openapi` 是 v1.5 后加的页面（在线契约浏览），早期那一版页面口径只算了
+> 「后台 26 + 开发者 16 + 认证 3 + 根 1」，既漏掉它，也漏掉 `developers/` 后续新增的
+> `/developers/openapi` 一页，所以对不上。
+>
+> 注 2（阶段 3）：安装器的 `/install` 页与 `/api/install/*` 四个路由已整体移到
+> `packages/universal-installer/`，不再计入本仓库授权系统的页面与路由口径，
+> 构建产物里也不会出现这两组路由。
 
 ### 3.1 部署形态
 
@@ -235,7 +240,7 @@ src/
 ├─ app/
 │  ├─ (auth)/                 登录、忘记密码、重置密码
 │  ├─ app/                    后台（layout 为 AppShell）
-│  └─ api/v1/                 70 个 route handler（另 api/install 4 个）
+│  └─ api/v1/                 70 个 route handler（安装器那 4 个已随阶段 3 移出，不计入）
 │     ├─ auth/                登录、登出、会话、找回/重置密码
 │     ├─ admin/               管理接口（全部 withAdmin + RBAC）
 │     └─ (根)                 公开客户端接口
@@ -260,9 +265,12 @@ prisma/
 ├─ migrations/                DDL 的唯一事实来源
 ├─ schema.prisma              由 db pull 自省生成
 └─ seed.ts                    演示数据
+packages/universal-installer/ 通用安装器（阶段 3 拆出：自带 README/package.json/tests，
+                              不反向 import 授权系统业务模块，只经 host/ 四个耦合文件）
 sdk-examples/                 六语言可运行示例 + verify.mjs（Preview，非已发布 SDK）
 tests/
-├─ unit/                      302 个纯函数与契约测试（22 个文件）
+├─ unit/                      227 个纯函数与契约测试（20 个文件；安装器另有 108 条在
+│                             packages/universal-installer/tests，用 `npm run test:installer` 跑）
 ├─ integration/               12 个真实 HTTP + DB 测试
 └─ e2e/                       16 个 Playwright 用例（7 个文件，含 setup）
 docs/                         交付文档（见下）
@@ -337,7 +345,7 @@ docs/                         交付文档（见下）
   `DEPLOYMENT_ENV=production` 时默认拒绝执行（退出码 1），只有显式 `ALLOW_DEMO_SEED=true` 才放行，
   且放行前打 ⚠️ 横幅（它会 TRUNCATE 30 张表）。`DEPLOYMENT_ENV=production` 启动时还会查 `users` 表，
   发现 `*@xinglan.dev` 或种子 displayName 的账号就并入启动闸门拦下（阶段 1 规则 → 退出码 1）；
-  查库失败（全新实例还没建表）只降级为警告，不拦安装器。单测在 `tests/unit/seed-guard.test.ts`、
+  查库失败（全新实例还没建表）只降级为警告，不拦启动。单测在 `tests/unit/seed-guard.test.ts`、
   `tests/unit/demo-accounts.test.ts`。
 - **上线前自检（阶段 2）**：`npm run check:prod-env -- --env-file /etc/licensing-saas/production.env`
   （不传 `--env-file` 则读当前目录 `.env`）。逐项输出 PASS/FAIL，任一 FAIL 退出码 1，
@@ -345,3 +353,10 @@ docs/                         交付文档（见下）
   `SECRETBOX_KEY`）是否仍是开发默认值、`DEPLOYMENT_ENV` 是否 production、`DEV_MAIL_SINK` 是否 false、
   `SIGNING_KEY_DIR` 是否还是 `.keys`、`APP_BASE_URL` 是否 https、`LICENSE_DB_URL` 是否仍在用开发口令。
   **只输出结论**：不打印密钥值、长度、片段，连接串只报 host 与口令性质。
+- **安装器已与授权系统解耦（阶段 3）**：后台任务（webhook dispatcher、backup scheduler）的启动条件
+  只看数据库是否就绪（`webhook_deliveries`、`backup_policies` 两张表存在），**不再读安装器锁文件**；
+  `/` 恒重定向到 `/app/dashboard`，不再按安装状态分流。安装器的页面、API 与 lib 已整体移到
+  `packages/universal-installer/`（自带 README 与测试，耦合点只有 `host/` 下四个文件），
+  授权系统的构建产物里没有 `/install` 与 `/api/install/*`。
+  `installer_records` 表从 `schema.prisma` 移除，但**表和数据继续留在库里**——
+  迁移 `20261113000000_installer_records_handoff` 是空迁移（纯注释、零 SQL），不产生任何 DROP。

@@ -12,7 +12,7 @@ import type {
   DatabaseInspection,
   DatabaseTestResult,
   InstallerConfigInput,
-} from "@/lib/installer/contract";
+} from "./contract";
 
 export interface ParsedDatabaseUrl {
   scheme: string;

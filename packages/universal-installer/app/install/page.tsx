@@ -1,11 +1,11 @@
 import { connection } from "next/server";
 import Link from "next/link";
 import { AlertTriangle, CheckCircle2, Lock, ShieldQuestion } from "lucide-react";
-import { InstallWizard } from "@/components/install/wizard";
-import { describeState, isInstallLocked } from "@/lib/installer/state";
-import { issueCsrfToken } from "@/lib/installer/guard";
-import { installDataDir, manifest, readEnvironment, readInstallGate } from "@/lib/installer/runtime";
-import { dictionaryFor } from "@/components/install/i18n";
+import { InstallWizard } from "../../components/install/wizard";
+import { describeState, isInstallLocked } from "../../lib/installer/state";
+import { issueCsrfToken } from "../../lib/installer/guard";
+import { installDataDir, manifest, readEnvironment, readInstallGate } from "../../lib/installer/runtime";
+import { dictionaryFor } from "../../components/install/i18n";
 
 /** cacheComponents 下必须显式声明：本页每次请求都要读安装状态。 */
 export const instant = false;

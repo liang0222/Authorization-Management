@@ -9,10 +9,10 @@
  */
 import { NextResponse } from "next/server";
 import { connection } from "next/server";
-import { contractInfo } from "@/lib/installer/manifest";
-import { describeState, isInstallLocked } from "@/lib/installer/state";
-import { CSRF_COOKIE, clientIp, checkRateLimit, envelope, failure, issueCsrfToken, INSTALL_RATE_LIMIT } from "@/lib/installer/guard";
-import { installDataDir, manifest, readEnvironment, readInstallGate } from "@/lib/installer/runtime";
+import { contractInfo } from "../../../../lib/installer/manifest";
+import { describeState, isInstallLocked } from "../../../../lib/installer/state";
+import { CSRF_COOKIE, clientIp, checkRateLimit, envelope, failure, issueCsrfToken, INSTALL_RATE_LIMIT } from "../../../../lib/installer/guard";
+import { installDataDir, manifest, readEnvironment, readInstallGate } from "../../../../lib/installer/runtime";
 
 export const instant = false;
 

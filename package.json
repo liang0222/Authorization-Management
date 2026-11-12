@@ -21,6 +21,7 @@
     "db:reset": "prisma migrate reset --force --skip-seed && tsx prisma/seed.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:installer": "vitest run --root packages/universal-installer",
     "test:watch": "vitest",
     "e2e": "playwright test"
   },

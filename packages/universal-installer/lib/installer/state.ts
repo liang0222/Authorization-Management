@@ -6,7 +6,7 @@
  *   也不能重新进入首次安装」。把转移写成表，任何非法转移都会抛错而不是
  * 悄悄落库，测试也能直接穷举。
  */
-import type { InstallState } from "@/lib/installer/contract";
+import type { InstallState } from "./contract";
 
 /** 完整转移表。导出是为了让测试能穷举，也让运维能一眼看到全部规则。 */
 export const TRANSITIONS: Record<InstallState, readonly InstallState[]> = {

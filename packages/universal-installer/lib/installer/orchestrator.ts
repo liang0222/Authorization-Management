@@ -18,14 +18,14 @@ import type {
   InstallerAdapter,
   InstallerConfigInput,
   StepRecord,
-} from "@/lib/installer/contract";
-import { INSTALLER_VERSION } from "@/lib/installer/contract";
-import { probeEnvironment } from "@/lib/installer/env-probe";
-import { acquireInstallLock, InstallLockBusyError } from "@/lib/installer/lock";
-import { buildDatabaseUrl, inspectDatabase, parseDatabaseUrl, describeTarget, withClient } from "@/lib/installer/database";
-import { runPrismaMigrate } from "@/lib/installer/migrations";
-import { writeRuntimeConfig, generateSecret, readEnvFile } from "@/lib/installer/config-writer";
-import { canRunInstall, describeState } from "@/lib/installer/state";
+} from "./contract";
+import { INSTALLER_VERSION } from "./contract";
+import { probeEnvironment } from "./env-probe";
+import { acquireInstallLock, InstallLockBusyError } from "./lock";
+import { buildDatabaseUrl, inspectDatabase, parseDatabaseUrl, describeTarget, withClient } from "./database";
+import { runPrismaMigrate } from "./migrations";
+import { writeRuntimeConfig, generateSecret, readEnvFile } from "./config-writer";
+import { canRunInstall, describeState } from "./state";
 import {
   appendLog,
   buildSnapshot,
@@ -36,8 +36,8 @@ import {
   transitionState,
   writeAttempt,
   writeLock,
-} from "@/lib/installer/store";
-import { validateManifest } from "@/lib/installer/manifest";
+} from "./store";
+import { validateManifest } from "./manifest";
 
 export interface RunInstallOptions {
   adapter: InstallerAdapter;

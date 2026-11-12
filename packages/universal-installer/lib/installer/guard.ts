@@ -14,7 +14,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { NextResponse } from "next/server";
-import { atomicWrite, ensureDir } from "@/lib/installer/store";
+import { atomicWrite, ensureDir } from "./store";
 
 export const CSRF_COOKIE = "install_csrf";
 export const CSRF_HEADER = "x-install-csrf";

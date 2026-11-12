@@ -6,9 +6,9 @@
  */
 import { NextResponse } from "next/server";
 import { connection } from "next/server";
-import { checkRateLimit, clientIp, envelope, failure, INSTALL_RATE_LIMIT } from "@/lib/installer/guard";
-import { installDataDir } from "@/lib/installer/runtime";
-import { latestAttempt, readLog } from "@/lib/installer/store";
+import { checkRateLimit, clientIp, envelope, failure, INSTALL_RATE_LIMIT } from "../../../../lib/installer/guard";
+import { installDataDir } from "../../../../lib/installer/runtime";
+import { latestAttempt, readLog } from "../../../../lib/installer/store";
 
 export const instant = false;
 

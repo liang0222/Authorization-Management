@@ -5,7 +5,7 @@ import {
   ERROR_MAP,
   mapError,
   parseDatabaseUrl,
-} from "@/lib/installer/database";
+} from "../lib/installer/database";
 
 describe("连接串解析", () => {
   it("标准 postgresql URL", () => {

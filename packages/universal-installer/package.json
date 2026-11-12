@@ -1,0 +1,33 @@
+{
+  "name": "@licensing/universal-installer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "通用安装器：把一次性安装向导（探测环境、跑迁移、建管理员、写安装记录）从授权系统里拆出来的自包含模块",
+  "type": "module",
+  "exports": {
+    ".": "./lib/installer/orchestrator.ts",
+    "./contract": "./lib/installer/contract.ts",
+    "./state": "./lib/installer/state.ts",
+    "./store": "./lib/installer/store.ts",
+    "./runtime": "./lib/installer/runtime.ts",
+    "./adapters/licensing-saas": "./lib/installer/adapters/licensing-saas/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "lucide-react": "^1.66.0",
+    "next": "16.4.3",
+    "pg": "^8.23.1",
+    "react": "19.3.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19",
+    "typescript": "^5",
+    "vitest": "^5.0.5"
+  }
+}

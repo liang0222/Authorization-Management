@@ -10,6 +10,56 @@ Release Note、commit、迁移 ID 与回滚方式。
 
 ## [Unreleased]
 
+### 架构 · 拆分 Universal Installer：运行时解耦 + 代码与数据隔离（阶段 3）
+
+安装器原本长在授权系统里，宿主不光打包它，还要**读它的锁文件**才敢起后台任务——部署形态被一个
+可选组件的状态绑架。本阶段分两步把它剥出去，安装器的代码、页面、API、测试全部搬到
+`packages/universal-installer/`，宿主侧的构建产物里不再有它们。
+
+**第一步 · 运行时解耦**
+
+- `src/lib/background.ts`：`backgroundWorkersAllowed()` 从「读 `<dataRoot>/licensing-saas/installed.lock`」
+  改成查数据库就绪（`SELECT to_regclass('public.webhook_deliveries'), to_regclass('public.backup_policies')`），
+  返回 `{ allowed, detail }`；缺表时 detail 写明缺哪张表、跑完迁移重启即可。连接串里的口令在 detail 里被 `scrub()` 抹掉。
+- `src/instrumentation.ts`：未就绪时打 `[boot] 后台任务未启动：<原因>`，不再出现「尚未安装，跳过后台任务」。
+- `src/proxy.ts` / `src/app/page.tsx`：`/` 恒重定向 `/app/dashboard`，不再按安装状态分流（原来会甩到 `/install`）。
+- `/install` 页与 `/api/install/{state,probe,run,log}` 从宿主移出：路由表 132→127、页面 49→48、API 路由 74→70、
+  静态页 106→101。
+
+**第二步 · 代码与数据隔离**
+
+- 新包 `packages/universal-installer/`：`app/install`、`app/api/install`、`components/install`、`lib/installer`、
+  `tests/`（108 条）、`database/`、以及自带的 `README.md` / `package.json` / `tsconfig.json` / `vitest.config.ts`。
+  包内已无宿主的 `@/lib/*` 别名 import（`grep '"@/' packages/universal-installer` 为空）。
+- 唯一耦合层 `host/` 四个文件：`password.ts`、`permissions.ts`（逐字副本，注明来源与同步规则）、
+  `database-url.ts`（抄 `DEV_DEFAULTS.LICENSE_DB_URL` 规则）、`prisma-client.ts`（唯一指向宿主生成物的一行相对 import）。
+- `prisma/schema.prisma` 删除 `model installer_records`；**表与数据不动**。新增迁移
+  `20261113000000_installer_records_handoff` 是**故意什么都不做**的空迁移（纯注释、0 条 SQL）——
+  Prisma 按 schema 差异自动生成会带 `DROP TABLE "installer_records";`，那样已部署实例的安装记录就没了。
+  表定义改由包内 `database/installer_records.sql` 持有（幂等 `CREATE TABLE IF NOT EXISTS`，与历史 DDL 一致）。
+- 适配器 `recordInstall()` 从 `db.installer_records.upsert()` 改成原生 SQL `INSERT ... ON CONFLICT (project_id) DO UPDATE`
+  （宿主 schema 已无该模型句柄）；安装器也不再反向 import 宿主的 `@/lib/background` 去替宿主启动定时器。
+
+**验证**（隔离副本 + 专用临时库）
+
+- 宿主：`tsc --noEmit` 0 错误；`npx vitest run` **227 passed (20 files)**、`npm run test:installer` **108 passed (6 files)**
+  （335−108=227，移走的 6 个文件逐项对得上：config-writer 18 / database 17 / lock 12 / manifest 20 / state 13 / store 28）；
+  `npm run build` exit 0、101/101 静态页、路由表 127 条且**无 install 行**。
+- 全新临时库 `migrate deploy` + seed + `next start`：日志 `[boot] env=sandbox … 配置检查通过` /
+  `[webhook] dispatcher started` / `[backup] scheduler started`，`「尚未安装」出现 0 次`。
+- 集成测试 12 passed；登录→签发→激活→心跳→解绑手工复验 200/200/201/200/201/200/200，解绑后旧令牌 401。
+- 数据保留实证：临时库先建表塞 3 行（内容 md5 `ac0ec532e254f795c880629ce01edc08`），走完新迁移后行数与 md5 **完全不变**，
+  索引仍在；`grep -v '^\s*--' migration.sql` 输出为空，drop/truncate/delete 检索 0 命中。
+
+**部署影响 / 回滚**
+
+- 无需 DDL：空迁移不产生任何语句，已部署库的 `installer_records` 原样保留；全新库由历史迁移 `20261104120000_installer_records` 建表。
+- 升级动作：`npm ci && npx prisma generate && npm run build && systemctl restart licensing-saas`；`/install` 会 404（不再挂载）。
+- 回滚：两步各一个提交，可分别 `git revert`；数据无需回滚。细节见 `docs/handoff.md` §2.4。
+
+- 记录更新：`README.md`（数量口径 48/70/78、§5 目录树加 `packages/`、§7 新增解耦条目）、
+  `docs/handoff.md` §1/§2.1/§2.3 + 新增 §2.4、`packages/universal-installer/README.md`。
+
 ### 安全 · 生产防呆护栏：seed 拒跑、演示账号拦启动、上线前自检（阶段 2）
 
 阶段 0 踩过的那次「`npm run db:seed` 打到生产库、3100 变 503」不该只靠人记性避免；现网库里还留着

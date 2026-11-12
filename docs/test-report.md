@@ -22,8 +22,8 @@ Playwright 1.64.1（Chromium 1248）
 | --- | --- | --- | --- |
 | 类型检查 | `npm run typecheck`（= `tsc --noEmit`） | **0 错误** | ~20s |
 | OpenAPI lint | `npm run lint:openapi` | **通过**（结构 / schema / servers / 凭证泄漏 / YAML↔JSON 同步） | ~1s |
-| 生产构建 | `npm run build` | **成功，106/106 静态页**；路由表 132 条 = 40 ○ + 5 ◐ + 87 ƒ（干净副本 `npm ci` 后同样通过，见 1.1） | ~50s |
-| 单元测试 | `npm run test`（= `npx vitest run`） | **335 passed (26 files)**（阶段 1 新增 7 条启动闸门用例，阶段 2 新增 26 条护栏用例） | 3.7s |
+| 生产构建 | `npm run build` | **成功，101/101 静态页**；路由表 127 条（干净副本 `npm ci` 后同样通过，见 1.1）。比阶段 2 少 5 条，是阶段 3 把 `/install` 与 `/api/install/*` 移出宿主 | ~50s |
+| 单元测试 | `npm run test`（= `npx vitest run`） | **227 passed (20 files)**；安装器另有 **108 passed (6 files)**，用 `npm run test:installer` 单独跑（阶段 3 把 6 个安装器测试文件移出宿主：335−108=227） | 3.0s |
 | 集成测试 | `npx vitest run -c vitest.integration.config.ts` | **12 passed** | 15.4s |
 | 端到端 | `npx playwright test` | **16 tests in 7 files：14 passed / 2 failed** | 2.7m |
 
@@ -37,12 +37,12 @@ Playwright 1.64.1（Chromium 1248）
 
 | 数字 | 命令 |
 | --- | --- |
-| 单元 335 / 26 文件 | `npx vitest run` → `Test Files 26 passed (26) / Tests 335 passed (335)` |
+| 单元 227 / 20 文件 | `npx vitest run` → `Test Files 20 passed (20) / Tests 227 passed (227)`；`npm run test:installer` → `Test Files 6 passed (6) / Tests 108 passed (108)` |
 | 集成 12 / 1 文件 | `npx vitest run -c vitest.integration.config.ts`（先 `npm run db:seed`） |
 | 端到端 16 / 7 文件 | `npx playwright test --list` → `Total: 16 tests in 7 files`（含 1 条 setup） |
-| 静态页 106 | `npm run build` → `✓ Generating static pages using 3 workers (106/106)` |
-| 页面 49 | `find src/app -name 'page.tsx' \| wc -l` |
-| API 路由 74 / route handler 82 | `find src/app/api -name 'route.ts' \| wc -l` / `find src/app -name 'route.ts' \| wc -l` |
+| 静态页 101 | `npm run build` → `✓ Generating static pages using 3 workers (101/101)` |
+| 页面 48 | `find src/app -name 'page.tsx' \| wc -l` |
+| API 路由 70 / route handler 78 | `find src/app/api -name 'route.ts' \| wc -l` / `find src/app -name 'route.ts' \| wc -l` |
 
 ### 1.1 干净安装后 `npm run build` 会失败（阶段 0 实测，阶段 0.5 已修复）
 
@@ -383,11 +383,114 @@ host 与「是否用了开发默认口令」，连接串里的口令不会出现
 顺带说一句：这三个账号的密码是 `License#2026` 这种公开演示口令，也就是说现网 3100 现在有一个
 **人人知道密码的管理员入口**——这条比「重启被拦」更值得先处理。
 
-## 2. 单元测试（335 个 / 26 个文件）
+### 1.4 安装器拆分（阶段 3 实测）
+
+分两步：先把运行时依赖解耦（宿主不再读安装器锁才起后台任务），再把代码与数据归属隔离（代码搬进
+`packages/universal-installer/`，`installer_records` 只从 schema 移除、表和数据不动）。
+
+**1.4.1 运行时解耦**
+
+改之前：`src/lib/background.ts` 的 `backgroundWorkersAllowed()` 是 `existsSync(join(dataRoot(), "licensing-saas", "installed.lock"))`，
+`src/proxy.ts` 与 `src/app/page.tsx` 也读同一把锁把 `/` 甩到 `/install`。
+
+改之后：`backgroundWorkersAllowed()` 查数据库就绪（`SELECT to_regclass('public.webhook_deliveries')::text AS webhook,
+to_regclass('public.backup_policies')::text AS backup`），返回 `{ allowed, detail }`；`scrub()` 把连接串里的口令抹成 `://user:***@`。
+
+隔离副本（`/root/s3`，全新 `npm ci`）第一步自检：
+
+```
+npx tsc --noEmit                 → TC_EXIT=0
+npm run test                     → Test Files 26 passed (26) / Tests 335 passed (335)
+npm run build                    → BUILD_EXIT=0；✓ Generating static pages (101/101)；路由表 127 条
+                                   含 install 的行: 无
+```
+
+**1.4.2 代码与数据隔离**
+
+搬迁清单（`git mv`，保留历史）：`lib/installer`（12 个文件）、`components/install`（2）、`app/install`（1 页）、
+`app/api/install`（4 个 route）、`tests/unit/installer-*`（6 个文件 108 条）。宿主侧新增的只有
+`packages/universal-installer/host/` 四个耦合文件（`password.ts`、`permissions.ts`、`database-url.ts`、
+`prisma-client.ts`）与包脚手架（`package.json`、`tsconfig.json`、`vitest.config.ts`、`README.md`、`database/installer_records.sql`）。
+
+```
+grep -rn '"@/' packages/universal-installer     → 空（没有反向 import 宿主业务模块）
+npx tsc --noEmit                                → TC_EXIT=0
+npm run test                                    → Test Files 20 passed (20) / Tests 227 passed (227)
+npm run test:installer                          → Test Files 6 passed (6) / Tests 108 passed (108)
+npm run build                                   → BUILD_EXIT=0；101/101 静态页；路由表 127 条；含 install 的行: 无
+```
+
+335→227 的差额逐文件对得上：`installer-config-writer` 18、`installer-database` 17、`installer-lock` 12、
+`installer-manifest` 20、`installer-state` 13、`installer-store` 28，合计 108；两条命令合计 335，**没有用例消失**。
+
+**1.4.3 数据保留实证（`installer_records` 不许 DROP）**
+
+Prisma 按 schema 差异自动生成迁移会带 `DROP TABLE "installer_records";`，所以这次**不用** `prisma migrate dev` 的产物，
+手写一条空迁移 `prisma/migrations/20261113000000_installer_records_handoff/migration.sql`（纯注释、零语句）。
+验证方法：临时库 `licensing_s3_upgrade` 先只应用阶段 3 之前的迁移集（把新迁移目录临时移出），塞 3 行数据取基线，
+再把目录放回跑 `prisma migrate deploy`，比对行数与内容 md5。
+
+```
+# 升级前（旧迁移集建出表：10 列 + installer_records_pkey + installer_records_project_id_key）
+INSERT 0 3
+ rows |           content_md5
+    3 | ac0ec532e254f795c880629ce01edc08
+
+# 放回空迁移后 deploy
+All migrations have been successfully applied.
+ rows |           content_md5
+    3 | ac0ec532e254f795c880629ce01edc08          ← 行数与内容完全不变
+ migration_name                           | applied
+ 20261113000000_installer_records_handoff | t
+索引：installer_records_pkey / installer_records_project_id_key（两条都还在）
+
+# 迁移 SQL 里没有 DDL
+grep -vE '^\s*--' prisma/migrations/20261113000000_installer_records_handoff/migration.sql   → 输出为空（0 条语句）
+… | grep -inE "drop|truncate|delete"                                                          → 无（0 命中）
+```
+
+全新库同样安全：历史迁移 `20261104120000_installer_records` 仍会建表，`prisma migrate deploy` 在空库上一次跑完（含这条空迁移）。
+
+**1.4.4 启动日志、集成与手工链路**
+
+临时库 `licensing_s3` 用 `SEED_CREDENTIAL_ENVIRONMENT=sandbox` 灌种子，`next start -p 3017`（`DEPLOYMENT_ENV=sandbox`）：
+
+```
+[boot] env=sandbox signingKeyDir=.keys-s3 backupDir=.backups-s3 配置检查通过
+[webhook] dispatcher started, interval=5000ms
+[backup] scheduler started, interval=30000ms
+「尚未安装」出现次数: 0
+ready=200 login=200
+```
+
+```
+TEST_BASE_URL=http://127.0.0.1:3017 TEST_PUBLIC_CLIENT_ID=pc_sandbox_desktop_4a91c7e3b2 \
+  npx vitest run -c vitest.integration.config.ts   → Test Files 1 passed (1) / Tests 12 passed (12)
+```
+
+手工链路（Ed25519 签名那步用 node 发同一 HTTP 请求，其余等价于 curl）：
+
+```
+1 登录              HTTP 200  cookie=lic_session csrf=有(32字符)
+2 取产品与客户       HTTP 200  product=fluxpanel-desktop
+3 签发授权          HTTP 201  id=116b832f… key=Y2B2T1…(脱敏)
+4 申请激活挑战       HTTP 200  challenge_id=ed3ed961…
+5 签名激活          HTTP 201  activation=3d3fc1a5… token=342字符
+6 心跳              HTTP 200  ok=true 新token=342字符
+7 解绑              HTTP 200  ok=true released=true
+8 解绑后旧令牌心跳   HTTP 401  code=CLIENT_AUTH_FAILED
+```
+
+坑（都会让人误判成「功能坏了」）：`/api/v1/activations` 与 `deactivate` 必须带 `Idempotency-Key`（≥8 字符，
+缺了回 400 `INVALID_REQUEST`）；激活限流 10 次/60 秒，连跑要等窗口；sandbox 部署必须用 sandbox 版 `client_id`
+（`pc_sandbox_desktop_4a91c7e3b2`），seed 与 server 也必须共用同一套 `SESSION_SECRET`/`LICENSE_HMAC_PEPPER`/`SECRETBOX_KEY`。
+
+## 2. 单元测试（227 个 / 20 个文件；阶段 3 前为 335/26，其中 108 条随安装器移入 `packages/universal-installer/tests`）
 
 只测纯函数与领域规则，不碰数据库、不 mock 业务分支。
 
-逐文件用例数（`npx vitest run --reporter=json` 统计 `assertionResults.length`，合计 335）：
+逐文件用例数（`npx vitest run --reporter=json` 统计 `assertionResults.length`）。下表是阶段 3 **之前**的全量快照（合计 335），
+其中 6 个 `installer-*` 文件共 108 条已在阶段 3 移到包内，宿主现为 227；两处都用同一份用例，没有删减：
 
 | 文件 | 用例数 | 文件 | 用例数 |
 | --- | --- | --- | --- |

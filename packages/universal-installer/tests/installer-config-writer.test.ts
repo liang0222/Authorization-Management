@@ -10,7 +10,7 @@ import {
   renderEnvFile,
   summarizeConfig,
   writeRuntimeConfig,
-} from "@/lib/installer/config-writer";
+} from "../lib/installer/config-writer";
 
 let dir: string;
 

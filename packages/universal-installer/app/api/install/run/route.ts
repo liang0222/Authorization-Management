@@ -8,11 +8,10 @@
  *
  * 返回的是完整 attempt（每一步的 status / 耗时 / 结论），前端据此渲染进度与失败定位。
  */
-import { startBackgroundWorkers } from "@/lib/background";
 import { NextResponse } from "next/server";
 import { connection } from "next/server";
-import { canRunInstall, describeState } from "@/lib/installer/state";
-import { envelope, failure, guardInstallPost } from "@/lib/installer/guard";
+import { canRunInstall, describeState } from "../../../../lib/installer/state";
+import { envelope, failure, guardInstallPost } from "../../../../lib/installer/guard";
 import {
   adapter,
   installDataDir,
@@ -20,9 +19,9 @@ import {
   invalidateInstallGate,
   manifest,
   readInstallGate,
-} from "@/lib/installer/runtime";
-import { InstallBusyError, InstallRefusedError, runInstall } from "@/lib/installer/orchestrator";
-import type { InstallerConfigInput } from "@/lib/installer/contract";
+} from "../../../../lib/installer/runtime";
+import { InstallBusyError, InstallRefusedError, runInstall } from "../../../../lib/installer/orchestrator";
+import type { InstallerConfigInput } from "../../../../lib/installer/contract";
 
 export const instant = false;
 /** 迁移与建表可能很久，给足时间（Next 的默认超时更短）。 */
@@ -97,12 +96,12 @@ export async function POST(req: Request) {
     invalidateEnvironment();
 
     /**
-     * 启动期后台任务是被跳过的（那时表还不存在）。装完之后在这里补起，
-     * 用户不需要为「让 webhook 投递器活过来」再重启一次服务。
+     * 阶段 3 起这里不再回调宿主的 `startBackgroundWorkers()`。
+     *
+     * 宿主的后台任务（Webhook 投递器、备份调度器）现在只看数据库是否就绪：
+     * 装完、表在了，宿主重启即自动拉起；安装器不该反向 import 宿主业务模块，
+     * 也不该替宿主进程启动定时器（拆包后两者可能不在一台机器上）。
      */
-    if (result.ok) {
-      await startBackgroundWorkers();
-    }
 
     return NextResponse.json(
       envelope(
