@@ -1,6 +1,6 @@
 import { connection } from "next/server";
 import Link from "next/link";
-import { AlertTriangle, CheckCircle2, Lock, ShieldQuestion } from "lucide-react";
+import { AlertTriangle, Lock, ShieldQuestion } from "lucide-react";
 import { InstallWizard } from "../../components/install/wizard";
 import { describeState, isInstallLocked } from "../../lib/installer/state";
 import { issueCsrfToken } from "../../lib/installer/guard";

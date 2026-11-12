@@ -12,6 +12,7 @@
     "build": "node scripts/copy-api-reference.mjs && next build",
     "start": "next start",
     "lint": "eslint",
+    "audit:prod": "npm audit --omit=dev",
     "lint:openapi": "node scripts/openapi-lint.mjs",
     "check:prod-env": "tsx scripts/check-prod-env.mts",
     "openapi:json": "node scripts/generate-openapi-json.mjs",

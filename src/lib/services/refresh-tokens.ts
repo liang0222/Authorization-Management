@@ -1,7 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db";
 import { toPrismaBytes } from "@/lib/auth/totp";
-import { ApiError } from "@/lib/http/api";
 import type { Prisma } from "@/generated/prisma/client";
 
 /**

@@ -7,7 +7,7 @@
  *
  * 运行：npm run db:seed
  */
-import { createHash, createHmac, generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
+import { createHash, createHmac, generateKeyPairSync, randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PrismaPg } from "@prisma/adapter-pg";
@@ -444,7 +444,7 @@ async function main() {
   const plansByProduct = new Map<string, Array<{ id: string; key: string; duration: { unit: "day" | "month" | "lifetime"; value: number }; maxDevices: number; maxActivationCount: number | null; maxSubjects: number | null; features: Record<string, unknown> }>>();
 
   for (const product of products) {
-    const list: Array<{ id: string; key: string; duration: any; maxDevices: number; maxActivationCount: number | null; maxSubjects: number | null; features: Record<string, unknown> }> = [];
+    const list: Array<{ id: string; key: string; duration: { unit: "day" | "month" | "lifetime"; value: number }; maxDevices: number; maxActivationCount: number | null; maxSubjects: number | null; features: Record<string, unknown> }> = [];
     for (const def of planDefs) {
       // 按「功能在列表里的位次」逐级解锁：布尔功能第 i 个在 tier >= i 时开启；
       // 数值功能按档位放大；字符串功能分基础/专业两档。这样每个产品都自带一套

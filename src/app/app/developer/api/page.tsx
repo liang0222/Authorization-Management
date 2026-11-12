@@ -27,7 +27,7 @@ import { JsonBlock } from "@/components/security/json-block";
 import { CREDENTIAL_TYPE_LABEL, type CredentialRow } from "@/components/developer/credential-dialogs";
 import { useResource } from "@/lib/client/use-resource";
 import { useSession } from "@/lib/client/session-context";
-import { apiRequest, errorMessage } from "@/lib/client/api";
+import { errorMessage } from "@/lib/client/api";
 import type { PageResult } from "@/lib/types";
 import { cn } from "@/lib/utils";
 

@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { config } from "@/lib/config";
 import { BackupAdapterError } from "./types";
@@ -123,7 +123,7 @@ export async function restoreIntoScratch(dump: Buffer, expected: { tables: numbe
 
     // 用 stdin 传输，避免在容器里落一份明文 dump。
     await new Promise<void>((resolve, reject) => {
-      const child = (require("node:child_process") as typeof import("node:child_process")).spawn(
+      const child = spawn(
         "docker",
         ["exec", "-i", DEFAULT_CONTAINER, "pg_restore", "--no-owner", "--no-privileges", "--dbname", scratch, "-U", "licensing"],
         { stdio: ["pipe", "ignore", "pipe"] },

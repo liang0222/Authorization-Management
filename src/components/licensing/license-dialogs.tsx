@@ -26,6 +26,7 @@ import { FormError } from "@/components/app/form-field";
 import { SecretReveal, licensesToCsv } from "@/components/app/secret-reveal";
 import { apiRequest, ClientApiError, errorMessage } from "@/lib/client/api";
 import { useResource } from "@/lib/client/use-resource";
+import { useNow } from "@/lib/client/use-now";
 import type { Lookups, LicenseRow } from "@/lib/types";
 import { durationLabel } from "@/lib/format";
 import { DURATION_PRESETS } from "@/lib/domain/period";
@@ -124,7 +125,7 @@ export function LicenseBatchDialog({
               title={`已生成 ${result.count} 张授权`}
               description="每张授权拥有独立 License ID 与兑换码"
               secrets={result.items.map((item) => ({ label: `兑换码 · ${item.id.slice(0, 8)}`, value: item.licenseKey }))}
-              download={{ filename: `licenses-${Date.now()}.csv`, content: licensesToCsv(result.items) }}
+              download={{ filename: `licenses-${result.items[0]?.id.slice(0, 8) ?? "export"}.csv`, content: licensesToCsv(result.items) }}
               warning={result.notice}
             />
             <DialogFooter>
@@ -290,6 +291,7 @@ export function LicenseRenewDialog({
   const [paymentRef, setPaymentRef] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const now = useNow();
 
   const submit = async () => {
     if (!license) return;
@@ -323,7 +325,7 @@ export function LicenseRenewDialog({
           <DialogTitle>续费授权</DialogTitle>
           <DialogDescription>
             当前到期：{license?.expiresAt ? new Date(license.expiresAt).toLocaleString("zh-CN") : "—"}
-            {license && new Date(license.expiresAt ?? 0).getTime() < Date.now()
+            {license && new Date(license.expiresAt ?? 0).getTime() < now
               ? "（已过期，默认从当前时间重新起算）"
               : "（未到期，从原到期时间顺延）"}
           </DialogDescription>

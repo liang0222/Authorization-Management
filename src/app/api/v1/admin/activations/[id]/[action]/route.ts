@@ -25,7 +25,7 @@ export async function POST(
   };
   const permission = permissionByAction[action];
   if (!permission) {
-    return withAdmin(req, null, async ({ requestId }) => {
+    return withAdmin(req, null, async () => {
       throw new ApiError(404, "RESOURCE_NOT_FOUND", `未知的设备操作：${action}`);
     });
   }
@@ -55,7 +55,7 @@ export async function POST(
       await tx.$queryRaw`SELECT id FROM licenses WHERE id = ${activation.license_id}::uuid FOR UPDATE`;
       const next =
         action === "release" ? "released" : action === "block" ? "blocked" : "active";
-      const updated = await tx.activations.update({
+      await tx.activations.update({
         where: { id },
         data: {
           status: next,

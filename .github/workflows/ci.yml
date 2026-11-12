@@ -28,11 +28,8 @@ jobs:
       - name: TypeScript
         run: npm run typecheck
       - name: ESLint
-        # 已知技术债：React Compiler 的两条规则（react-hooks/set-state-in-effect、
-        # react-hooks/preserve-manual-memoization）在存量页面里还有 40+ 条报错，
-        # 属于「能用但写法不规范」，本轮不批量重写页面。这里不隐藏结果：
-        # 日志照常输出，但不让整条 CI 因为存量债务而红。
-        continue-on-error: true
+        # 阶段 7：不再 continue-on-error。存量 React Compiler 两条规则已在
+        # eslint.config.mjs 降为 warn 并登记 ESLINT_DEBT.md；其余 error 一律拦截。
         run: npm run lint
       - name: OpenAPI 契约 lint
         run: npm run lint:openapi
@@ -42,6 +39,23 @@ jobs:
         run: npm run build
         env:
           NEXT_TELEMETRY_DISABLED: "1"
+
+  supply-chain:
+    name: 供应链审计（npm audit）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: 生产依赖 critical 门禁
+        # 只拦 critical；high 及以下由下一步打印，不阻断合并。
+        run: npm audit --omit=dev --audit-level=critical
+      - name: 全量依赖审计（含 dev，仅报告）
+        # 显式 `|| true` 让步骤保持绿色，同时完整输出 high/medium/low；
+        # 这里不是 continue-on-error，门禁步骤本身仍会失败。
+        run: npm audit --audit-level=critical || true
 
   integration:
     name: 集成测试（真实 PostgreSQL）

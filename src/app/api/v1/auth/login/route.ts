@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
     const pairKey = `login:${ip}:${body.email.toLowerCase()}`;
     const ipKey = `login-ip:${ip}`;
     for (const [key, limit] of [[pairKey, 8], [ipKey, 30]] as const) {
-      const gate = checkRateLimit(key, limit, 5 * 60_000);
+      const gate = checkRateLimit(key, limit);
       if (!gate.allowed) {
         // 429 也是失败尝试：只统计 401 的话，攻击者一旦被限流就再也到不了
         // 「10 分钟内失败 10 次」的告警阈值。这里只旁路观察，不改变 429 响应。

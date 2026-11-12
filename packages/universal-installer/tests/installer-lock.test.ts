@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   acquireInstallLock,
@@ -49,7 +49,6 @@ describe("安装互斥锁", () => {
 
   it("锁文件权限是 0600", () => {
     const held = acquireInstallLock(dir);
-    const { statSync } = require("node:fs") as typeof import("node:fs");
     expect(statSync(join(dir, "install.lock")).mode & 0o777).toBe(0o600);
     held.release();
   });
@@ -92,7 +91,7 @@ describe("安装互斥锁", () => {
       token: "t",
       // pid 1 一定活着，这里用一个几乎不可能存在的 pid
       pid: 4_000_000,
-      host: require("node:os").hostname() as string,
+      host: hostname(),
       acquiredAt: new Date().toISOString(),
       heartbeatAt: new Date().toISOString(),
     };
@@ -103,7 +102,7 @@ describe("安装互斥锁", () => {
     const stale = {
       token: "dead-token",
       pid: 4_000_000,
-      host: require("node:os").hostname() as string,
+      host: hostname(),
       acquiredAt: new Date(Date.now() - 10_000).toISOString(),
       heartbeatAt: new Date(Date.now() - 10_000).toISOString(),
     };
@@ -112,7 +111,6 @@ describe("安装互斥锁", () => {
     const held = acquireInstallLock(dir);
     expect(held.info.token).not.toBe("dead-token");
 
-    const { readdirSync } = require("node:fs") as typeof import("node:fs");
     expect(readdirSync(dir).some((name) => name.startsWith("install.lock.stale-"))).toBe(true);
     held.release();
   });

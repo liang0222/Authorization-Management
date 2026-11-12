@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canRunInstall } from "../lib/installer/state";
@@ -71,10 +71,7 @@ describe("原子写", () => {
     atomicWrite(path, "one");
     atomicWrite(path, "two");
     expect(readFileSync(path, "utf8")).toBe("two");
-    const leftovers = readFileSync;
-    void leftovers;
     // 目录里只应有目标文件本身
-    const { readdirSync } = require("node:fs") as typeof import("node:fs");
     expect(readdirSync(dir).filter((n) => n.includes(".tmp"))).toEqual([]);
   });
 

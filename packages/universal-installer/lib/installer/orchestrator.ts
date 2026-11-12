@@ -23,7 +23,6 @@ import { INSTALLER_VERSION } from "./contract";
 import { probeEnvironment } from "./env-probe";
 import { acquireInstallLock, InstallLockBusyError } from "./lock";
 import { buildDatabaseUrl, inspectDatabase, parseDatabaseUrl, describeTarget, withClient } from "./database";
-import { runPrismaMigrate } from "./migrations";
 import { writeRuntimeConfig, generateSecret, readEnvFile } from "./config-writer";
 import { canRunInstall, describeState } from "./state";
 import {
@@ -299,7 +298,7 @@ export async function runInstall(options: RunInstallOptions): Promise<RunInstall
   };
 
   /** 执行一步：落盘 running → 执行 → 落盘 ok/failed。 */
-  const step = async <T>(
+  const step = async (
     phase: InstallPhase,
     fn: () => Promise<{ ok: boolean; message: string; detail?: Record<string, unknown> }>,
   ): Promise<void> => {
@@ -452,10 +451,8 @@ export async function runInstall(options: RunInstallOptions): Promise<RunInstall
     });
 
     /* 10. 检查数据库初始化条件 */
-    let hasExistingTables = false;
     await step("db-precondition", async () => {
       const inspection = await options.adapter.inspectDatabase(options.input);
-      hasExistingTables = inspection.tableCount > 0;
       const blocking = !inspection.canCreate;
       return {
         ok: !blocking,

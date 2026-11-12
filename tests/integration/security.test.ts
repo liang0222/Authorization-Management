@@ -81,7 +81,6 @@ describe("阶段5 · 越权与 SSRF 回归", () => {
     operator = await login("ops@xinglan.dev", "License#2026");
     ctxA = await desktopContext(owner);
 
-    const orgA = await prisma.organizations.findFirstOrThrow({ where: { slug: "xinglan-software" } });
     const ownerA = await prisma.users.findFirstOrThrow({ where: { email: "owner@xinglan.dev" } });
     userAId = ownerA.id;
     // 给 A 组织准备一条真实授权：viewer/operator 的写接口需要一个存在的目标，

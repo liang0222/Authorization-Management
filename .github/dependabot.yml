@@ -1,0 +1,39 @@
+version: 2
+
+# 阶段 7：依赖更新节奏与分组。
+# - npm 每周一检查；minor/patch 合成一个 PR，major 不分组（Dependabot 默认逐个提）。
+# - GitHub Actions 每月检查。
+# - PR 标题/提交前缀统一 deps:。
+# - Dependabot 不支持按 SemVer 条件打标签；major 的 major-upgrade 标签由
+#   .github/workflows/dependabot-major-label.yml 在 PR 事件上补齐。
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "deps:"
+    groups:
+      npm-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "deps:"

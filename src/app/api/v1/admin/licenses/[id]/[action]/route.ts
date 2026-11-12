@@ -94,7 +94,7 @@ export async function POST(
   };
   const permission = permissionByAction[action];
   if (!permission) {
-    return withAdmin(req, null, async ({ requestId }) => {
+    return withAdmin(req, null, async () => {
       throw new ApiError(404, "RESOURCE_NOT_FOUND", `未知的授权操作：${action}`);
     });
   }

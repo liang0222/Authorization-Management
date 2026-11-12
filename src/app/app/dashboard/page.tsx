@@ -20,7 +20,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState, EmptyState } from "@/components/app/feedback";
 import { BarChart, Sparkline, StatusBars } from "@/components/app/charts";
-import { EffectiveStatusBadge, type Tone } from "@/components/app/status-badge";
+import type { Tone } from "@/components/app/status-badge";
 import { useResource } from "@/lib/client/use-resource";
 import { useSession } from "@/lib/client/session-context";
 import { EFFECTIVE_STATUS_LABEL, type EffectiveStatus } from "@/lib/domain/effective-status";

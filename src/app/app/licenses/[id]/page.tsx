@@ -7,7 +7,6 @@ import {
   ArrowLeft,
   Ban,
   CalendarClock,
-  Copy,
   FileKey,
   History,
   Laptop,

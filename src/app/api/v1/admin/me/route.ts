@@ -99,8 +99,6 @@ export async function PUT(req: NextRequest) {
   });
 }
 
-const mfaEnrollSchema = z.object({ action: z.literal("begin") });
-
 /**
  * MFA 管理：
  * - action=begin：生成 TOTP 密钥（加密存储），返回 otpauth 链接与当前验证码用于自检。

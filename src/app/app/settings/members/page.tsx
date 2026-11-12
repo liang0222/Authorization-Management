@@ -29,7 +29,7 @@ import {
 } from "@/components/settings/member-dialogs";
 import { useResource } from "@/lib/client/use-resource";
 import { useSession } from "@/lib/client/session-context";
-import { apiRequest, buildQuery, errorMessage } from "@/lib/client/api";
+import { apiRequest, buildQuery } from "@/lib/client/api";
 import { formatDateTime, formatRelative } from "@/lib/format";
 import type { PageResult } from "@/lib/types";
 import { cn } from "@/lib/utils";

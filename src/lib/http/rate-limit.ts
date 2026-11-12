@@ -37,7 +37,7 @@ export function rateLimit(key: string, limit: number, windowMs: number): RateLim
  * 只读检查：判断当前 key 是否已被打满，但不消耗额度。
  * 用于「成功不计数、只对失败计数」的登录限流。
  */
-export function checkRateLimit(key: string, limit: number, windowMs: number): RateLimitResult {
+export function checkRateLimit(key: string, limit: number): RateLimitResult {
   const now = Date.now();
   const bucket = buckets.get(key);
   if (!bucket || bucket.resetAt <= now) {

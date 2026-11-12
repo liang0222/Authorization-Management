@@ -150,7 +150,6 @@ export function SigningKeyRowActions({
   const terminal = status === "revoked";
   const canActivate = status === "staged";
   const canRetire = status === "active";
-  const canRevoke = !terminal;
 
   const apply = async (action: SigningKeyAction) => {
     try {

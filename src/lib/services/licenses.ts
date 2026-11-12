@@ -717,8 +717,6 @@ export function mapLicenseRow(
  *    回落到套餐/产品默认值。这样前端不需要知道「删了哪一条」。
  */
 
-const FEATURE_VALUE_TYPES = ["boolean", "number", "string"] as const;
-
 export interface FeatureOverrideInput {
   code: string;
   value: unknown;

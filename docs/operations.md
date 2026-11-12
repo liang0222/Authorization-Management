@@ -151,3 +151,51 @@ curl -fsS http://127.0.0.1:3100/health/ready     # 看 database 组件
 
 **仍未内置的定时任务**：月度恢复演练提醒、证书到期提醒。需要外部 cron 或人工执行，
 不要假设系统会自动做。
+
+---
+
+## 6. 依赖漏洞处置（供应链）
+
+### 6.1 扫描入口
+
+| 场景 | 命令/位置 | 是否阻断 |
+| --- | --- | --- |
+| 本地生产依赖体检 | `npm run audit:prod` | 否，人工判断 |
+| CI 生产依赖门禁 | `.github/workflows/ci.yml` 的 `supply-chain` job：`npm audit --omit=dev --audit-level=critical` | **critical 阻断合并** |
+| CI 全量依赖报告 | 同一 job：`npm audit --audit-level=critical \|\| true` | 否，只打印 high/medium/low |
+
+`supply-chain` 单独成 job 而不是挂在 `static` 末尾：审计依赖 npm registry 的网络与
+漏洞库状态，和编译/单测的失败原因不同；独立 job 能让“代码坏了”和“依赖有洞”在
+Checks 里一眼分开，也方便单独重跑。Node 基线保持 22。
+
+### 6.2 处置时限
+
+| 等级 | 时限 | 动作 |
+| --- | --- | --- |
+| critical | 48 小时内 | 升级到修复版本；确实无法升级时，写 `docs/security-exceptions.md` 走书面风险接受 |
+| high | 一周内 | 排入最近一次迭代升级；不能升级的同样登记例外 |
+| medium / low | 常规维护 | 随下一次依赖更新处理，不单独打断发布 |
+
+“书面风险接受”必须包含：漏洞编号、影响组件、接受理由、补偿措施、到期日、负责人。
+缺任意一项视为未接受；到期未复核的例外自动失效，必须重新评估或升级。
+
+### 6.3 处理流程
+
+1. 在 CI 的 `supply-chain` job 或本地 `npm run audit:prod` 看到告警；
+2. 确认是否影响实际运行路径（仅 devDependency、未使用的可选依赖、无法触发的代码路径）；
+3. 能升级就单独提依赖升级 PR，附 `npm audit` 前后对比；不要和业务改动混在一起；
+4. 不能升级则登记例外，写清补偿措施（例如关闭相关功能、加网络层限制、缩短 token 生命周期）；
+5. 修复/例外生效后重跑 `npm run audit:prod` 与 CI，确认 critical 清零或已登记；
+6. 例外到期前一周由负责人复核：升级、续期（需重新审批）或删除。
+
+### 6.4 本轮范围说明
+
+阶段 7 只建立扫描与流程，**不批量升级任何依赖**；实际升级另开 PR，避免把供应链变更
+和 ESLint/CI 改动混在一个提交里。
+
+以下两项是总提示词明确的本轮范围外事项，仅登记、不在阶段 7 实施：
+
+- 列表分页从 offset 迁移到 keyset（`cursor.ts` 本轮不动）；
+- 限流从 PostgreSQL/进程内计数迁移到 Redis（本轮不引入 Redis）。
+
+需要做时单独评估，不要顺手塞进安全修复 PR。

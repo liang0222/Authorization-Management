@@ -31,7 +31,7 @@
  */
 import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { basename, resolve } from "node:path";
 
 const argv = process.argv.slice(2);
 const apply = argv.includes("--apply");

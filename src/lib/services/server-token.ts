@@ -1,6 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
 import { prisma } from "@/lib/db";
-import { ApiError } from "@/lib/http/api";
 import { config } from "@/lib/config";
 import {
   canonicalJson,

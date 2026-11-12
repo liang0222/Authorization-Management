@@ -41,26 +41,6 @@ const DEVICE_STATUS_TONE: Record<string, Tone> = {
   merged: "neutral",
 };
 
-const ADMIN_STATUS_LABEL: Record<string, string> = {
-  draft: "草稿",
-  pending: "待激活",
-  active: "生效中",
-  suspended: "已暂停",
-  revoked: "已撤销",
-  cancelled: "已取消",
-  expired: "已过期",
-};
-
-const ADMIN_STATUS_TONE: Record<string, Tone> = {
-  draft: "neutral",
-  pending: "info",
-  active: "success",
-  suspended: "warning",
-  revoked: "danger",
-  cancelled: "neutral",
-  expired: "neutral",
-};
-
 const EVENT_LABEL: Record<string, string> = {
   created: "创建绑定",
   heartbeat: "心跳",
