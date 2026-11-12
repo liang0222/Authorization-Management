@@ -14,6 +14,7 @@ import {
   sessionCookieOptions,
 } from "@/lib/auth/session";
 import { writeAudit } from "@/lib/domain/audit";
+import { observeLoginFailure } from "@/lib/services/security-alerts";
 
 const loginSchema = z.object({
   email: z.string().trim().min(1, "请输入邮箱").email("邮箱格式不正确"),
@@ -33,6 +34,14 @@ export async function POST(req: NextRequest) {
     for (const [key, limit] of [[pairKey, 8], [ipKey, 30]] as const) {
       const gate = checkRateLimit(key, limit, 5 * 60_000);
       if (!gate.allowed) {
+        // 429 也是失败尝试：只统计 401 的话，攻击者一旦被限流就再也到不了
+        // 「10 分钟内失败 10 次」的告警阈值。这里只旁路观察，不改变 429 响应。
+        void observeLoginFailure({
+          email: body.email,
+          ip: meta.ip,
+          requestId: meta.requestId,
+          userAgent: meta.userAgent,
+        });
         throw new ApiError(429, "RATE_LIMITED", "登录尝试过于频繁，请稍后再试", {
           retry_after_seconds: gate.retryAfterSeconds,
         });
@@ -50,6 +59,12 @@ export async function POST(req: NextRequest) {
     if (!user || !passwordOk) {
       recordFailure(pairKey, 8, 5 * 60_000);
       recordFailure(ipKey, 30, 5 * 60_000);
+      void observeLoginFailure({
+        email: body.email,
+        ip: meta.ip,
+        requestId: meta.requestId,
+        userAgent: meta.userAgent,
+      });
       throw new ApiError(401, "CLIENT_AUTH_FAILED", "邮箱或密码不正确");
     }
     if (user.status !== "active") {

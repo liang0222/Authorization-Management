@@ -603,7 +603,11 @@ describe("阶段5 · 越权与 SSRF 回归", () => {
       prisma.signing_keys.count({ where: { organization_id: org.id } }),
       prisma.webhook_endpoints.count({ where: { organization_id: org.id } }),
       prisma.backup_jobs.count({ where: { organization_id: org.id } }),
-      prisma.audit_logs.count({ where: { organization_id: org.id } }),
+      // 阶段6：403/404 探测会按设计写入安全告警审计；快照只统计业务审计，
+      // 安全告警的增量由告警用例单独断言，不能当作越权写成功。
+      prisma.audit_logs.count({
+        where: { organization_id: org.id, action: { notIn: ["authz.probing", "auth.login_bruteforce"] } },
+      }),
     ]);
     return {
       organizationId: org.id,

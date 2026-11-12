@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { config } from "@/lib/config";
 import { writeAudit } from "@/lib/domain/audit";
-import { safePostJson } from "@/lib/domain/outbound-http";
+import { emitAlert } from "@/lib/services/alerts";
 
 /**
  * 备份告警（规格 24 Go-Live Gate：「备份失败、上传失败、磁盘或 API 异常有告警」）。
@@ -48,11 +48,11 @@ function alertText(input: BackupAlertInput): string {
 
 export async function notifyBackupIssue(input: BackupAlertInput): Promise<BackupAlertResult> {
   const text = alertText(input);
-  const result: BackupAlertResult = { auditWritten: false, logged: false, webhook: "skipped" };
-
-  // 1. 审计日志
-  try {
-    await writeAudit({
+  // 阶段 6 起投递机制抽到 services/alerts：审计、日志、webhook 的失败语义
+  // 与登录/越权告警共用一套。备份仍 await webhook，保持原有
+  // `webhook: delivered|failed` 返回值和排障习惯；事件名与报文结构不变。
+  const delivered = await emitAlert({
+    audit: {
       organizationId: input.organizationId,
       actorType: "system",
       actorId: null,
@@ -67,49 +67,28 @@ export async function notifyBackupIssue(input: BackupAlertInput): Promise<Backup
         policy: input.policyName ?? null,
         failed_targets: input.failedTargets ?? [],
       },
-    });
-    result.auditWritten = true;
-  } catch {
-    // writeAudit 内部已兜底，这里只是防御性处理
-  }
-
-  // 2. journalctl 结构行
-  console.error(`[backup][alert] ${text}`);
-  result.logged = true;
-
-  // 3. 可选外部 webhook
-  const url = process.env.BACKUP_ALERT_WEBHOOK_URL;
-  if (!url) return result;
-
-  const body = JSON.stringify({
-    event: "backup.failed",
-    occurred_at: new Date().toISOString(),
-    environment: config.deploymentEnv,
-    organization_id: input.organizationId,
-    backup_id: input.backupId,
-    job_id: input.jobId,
-    status: input.status,
-    error_code: input.errorCode ?? null,
-    error_message: input.errorMessage ?? null,
-    policy: input.policyName ?? null,
-    failed_targets: input.failedTargets ?? [],
+    },
+    logTag: "[backup][alert]",
+    logMessage: text,
+    webhookBody: {
+      event: "backup.failed",
+      occurred_at: new Date().toISOString(),
+      environment: config.deploymentEnv,
+      organization_id: input.organizationId,
+      backup_id: input.backupId,
+      job_id: input.jobId,
+      status: input.status,
+      error_code: input.errorCode ?? null,
+      error_message: input.errorMessage ?? null,
+      policy: input.policyName ?? null,
+      failed_targets: input.failedTargets ?? [],
+    },
   });
-
-  const response = await safePostJson({
-    url,
-    body,
-    headers: { "content-type": "application/json", "user-agent": "ziming-licensing-backup-alert/1.5" },
-    timeoutMs: 5_000,
-    policy: { allowHttpLoopback: config.deploymentEnv !== "production" },
-  });
-  result.webhook =
-    response.error === null && response.status !== null && response.status >= 200 && response.status < 300
-      ? "delivered"
-      : "failed";
-  if (result.webhook === "failed") {
-    console.error(`[backup][alert] 告警 webhook 投递失败：${response.error ?? `HTTP ${response.status}`}`);
-  }
-  return result;
+  return {
+    auditWritten: delivered.auditWritten,
+    logged: delivered.logged,
+    webhook: delivered.webhook === "pending" ? "failed" : delivered.webhook,
+  };
 }
 
 /** 供调度器在「策略根本没有可用目标」这类配置错误上告警。 */

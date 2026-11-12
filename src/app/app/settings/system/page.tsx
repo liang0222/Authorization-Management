@@ -37,6 +37,43 @@ interface SettingsResponse {
   updatedAt: string | null;
 }
 
+interface SecurityAlertItem {
+  id: string;
+  action: string;
+  severity: "warning";
+  actorType: string;
+  actorId: string | null;
+  ip: string | null;
+  requestId: string | null;
+  dimensions: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+interface SecurityAlertsResponse {
+  alerts: SecurityAlertItem[];
+  total: number;
+  limit: number;
+}
+
+const SECURITY_ALERT_LABEL: Record<string, string> = {
+  "auth.login_bruteforce": "登录爆破",
+  "authz.probing": "越权探测",
+};
+
+function alertDimensionText(alert: SecurityAlertItem): string {
+  const d = alert.dimensions ?? {};
+  const parts: string[] = [];
+  if (typeof d.email === "string") parts.push(d.email);
+  if (typeof d.ip === "string") parts.push(`IP ${d.ip}`);
+  if (typeof d.status === "number") parts.push(`HTTP ${d.status}`);
+  if (typeof d.method === "string" && typeof d.path === "string") {
+    parts.push(`${d.method} ${d.path}`);
+  }
+  if (typeof d.failures === "number") parts.push(`${d.failures} 次失败`);
+  if (typeof d.events === "number") parts.push(`${d.events} 次拒绝`);
+  return parts.join(" · ") || "—";
+}
+
 type Draft = Record<string, number | boolean | undefined>;
 
 function effectiveValueOf(field: SettingField, source: Record<string, unknown> | undefined): number | boolean {
@@ -54,6 +91,14 @@ export default function SystemSettingsPage() {
 
   const { data, error, isLoading, isRefreshing, refresh } = useResource<SettingsResponse>(
     canRead ? "/api/v1/admin/settings" : null,
+  );
+  /**
+   * 安全告警是只读旁路视图，权限用 audit:read（与告警 API 一致）。
+   * 系统设置页本身要求 settings:read，因此这里只在拿得到页面时附加加载。
+   */
+  const canReadSecurityAlerts = hasPermission("audit:read");
+  const securityAlerts = useResource<SecurityAlertsResponse>(
+    canRead && canReadSecurityAlerts ? "/api/v1/admin/security-alerts" : null,
   );
 
   const [draft, setDraft] = useState<Draft>({});
@@ -362,6 +407,74 @@ export default function SystemSettingsPage() {
           </Section>
         </div>
       </div>
+
+      <Section
+        title="最近安全告警"
+        description="登录爆破与越权探测的最近 20 条记录。没有配置外发 webhook 时，这里是唯一的后台可视图。"
+        contentClassName="p-0"
+      >
+        <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2">
+          <span className="text-[11px] text-muted-foreground">
+            {securityAlerts.data ? `共 ${securityAlerts.data.total} 条，显示最近 ${securityAlerts.data.alerts.length} 条` : "只读"}
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={securityAlerts.refresh}
+            disabled={securityAlerts.isRefreshing || !canReadSecurityAlerts}
+          >
+            <RefreshCw className={cn("size-3.5", securityAlerts.isRefreshing && "animate-spin")} /> 刷新
+          </Button>
+        </div>
+        {!canReadSecurityAlerts ? (
+          <EmptyState
+            icon={<ShieldAlert className="size-5" />}
+            title="没有查看安全告警的权限"
+            description="需要 audit:read 权限；接口同样会拒绝这次请求。"
+          />
+        ) : securityAlerts.isLoading && !securityAlerts.data ? (
+          <div className="space-y-2 p-4" aria-busy="true">
+            <div className="h-10 animate-pulse rounded-md bg-muted/60" />
+            <div className="h-10 animate-pulse rounded-md bg-muted/40" />
+            <div className="h-10 animate-pulse rounded-md bg-muted/30" />
+          </div>
+        ) : securityAlerts.error && !securityAlerts.data ? (
+          <div className="p-4">
+            <ErrorState error={securityAlerts.error} onRetry={securityAlerts.refresh} compact />
+          </div>
+        ) : securityAlerts.data && securityAlerts.data.alerts.length > 0 ? (
+          <ul className="divide-y divide-border">
+            {securityAlerts.data.alerts.map((alert) => (
+              <li key={alert.id} className="flex flex-wrap items-start justify-between gap-2 px-4 py-2.5">
+                <div className="min-w-0 space-y-1">
+                  <p className="flex flex-wrap items-center gap-1.5 text-xs font-medium text-foreground">
+                    <ShieldAlert className="size-3.5 text-warning" />
+                    {SECURITY_ALERT_LABEL[alert.action] ?? alert.action}
+                    <span className="font-mono text-[10px] text-muted-foreground">{alert.action}</span>
+                    {typeof alert.dimensions?.trigger === "string" ? (
+                      <ToneBadge tone="warning" dot={false} className="text-[10px]">
+                        维度 {alert.dimensions.trigger}
+                      </ToneBadge>
+                    ) : null}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">{alertDimensionText(alert)}</p>
+                </div>
+                <div className="text-right text-[11px] text-muted-foreground">
+                  <p>{formatDateTime(alert.createdAt, "Asia/Shanghai")}</p>
+                  <p className="font-mono">{alert.ip ?? "IP 未知"}</p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <EmptyState
+            icon={<ShieldAlert className="size-5" />}
+            title="最近没有安全告警"
+            description="登录失败或越权请求达到阈值后，会在这里出现一条记录。"
+          />
+        )}
+      </Section>
 
       <FormHint>改动只影响后续行为：缩短日志保留天数不会立刻删除历史记录，清理由后台任务按新阈值执行。</FormHint>
     </div>

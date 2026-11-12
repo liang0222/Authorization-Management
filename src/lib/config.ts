@@ -79,6 +79,11 @@ export const config = {
   deploymentEnv: readEnv("DEPLOYMENT_ENV"),
   isSandbox: readEnv("DEPLOYMENT_ENV") === "sandbox",
   backupEncryptionKey: readEnv("BACKUP_ENCRYPTION_KEY"),
+  /**
+   * 告警 webhook：阶段 6 起统一用 `ALERT_WEBHOOK_URL`。
+   * 未设置时回退阶段 4 的 `BACKUP_ALERT_WEBHOOK_URL`，现有部署不需要改环境变量。
+   */
+  alertWebhookUrl: readOptionalEnv("ALERT_WEBHOOK_URL") ?? readOptionalEnv("BACKUP_ALERT_WEBHOOK_URL"),
   /** 备份落盘根目录（Local 暂存区，同时也是「必需目标」之一）。 */
   backupLocalDir: process.env.BACKUP_LOCAL_DIR ?? ".backups",
   /**
@@ -118,7 +123,31 @@ export const config = {
 
 const VALID_ENVS = new Set(["production", "sandbox", "development"]);
 
-/** 生产环境禁止使用开发默认密钥。返回问题列表，空数组表示通过。 */
+/**
+ * 安全告警阈值（阶段 6）。
+ *
+ * 取值依据：
+ * - 登录：正常用户 10 分钟内输错 1–2 次已经算多；同一 IP 10 分钟内 10 次失败
+ *   （约每 60 秒一次）明显超出人手误触，接近脚本速度。同一邮箱在 3 个以上 IP
+ *   累计 10 次，是「撞库/分布式爆破」与「一个人换了网络」的分界：单用户换 3 个
+ *   网络还连续错 10 次，本身也值得看一眼。
+ * - 越权：管理后台正常操作只会零星出现 403（权限变更后的旧页面、过期按钮）；
+ *   同一账号或同一 IP 10 分钟内 20 次 403/跨租户 404，是明显的接口枚举节奏。
+ *   阈值取 20 而不是 5，是为了不把「改完权限没刷新」的正常用户打成告警。
+ * - 去重：同一维度 30 分钟只告警一次。爆破通常持续数分钟到数十分钟，30 分钟
+ *   既能把首轮攻击完整暴露，又不会让一个持续攻击把审计表刷爆。
+ */
+export const SECURITY_ALERT_THRESHOLDS = {
+  loginWindowSeconds: 10 * 60,
+  loginFailuresPerIp: 10,
+  loginFailuresPerEmail: 10,
+  loginEmailDistinctIps: 3,
+  authzWindowSeconds: 10 * 60,
+  authzEventsPerActor: 20,
+  authzEventsPerIp: 20,
+  dedupeSeconds: 30 * 60,
+} as const;
+
 export function productionSafetyIssues(): string[] {
   const issues: string[] = [];
 

@@ -67,6 +67,48 @@ async function consume(bucketKey: string, limit: number, windowSeconds: number) 
 }
 
 /**
+ * 非对齐窗口计数器（阶段 6 安全告警用）。
+ *
+ * 与公开 API 的 `consume` 不同：这里不按 epoch 对齐，而是「第一次事件起算
+ * windowSeconds」，过期后下一次事件重新开窗。原因：
+ * - 登录/越权阈值描述的是「最近 10 分钟」，对齐窗口会在边界把两段攻击拆开；
+ * - 去重要求「30 分钟内只告警一次」，必须是相对上一次告警的滑动窗口，
+ *   固定 30 分钟桶会在 :29 与 :31 各放行一次，等于没去重。
+ *
+ * 仍然是单条 UPSERT，多个实例/并发请求下由 PostgreSQL 行锁串行化，
+ * `count === 1` 即「本次调用是窗口内第一个事件」，可直接当作去重令牌。
+ */
+export async function bumpWindowCounter(
+  bucketKey: string,
+  windowSeconds: number,
+): Promise<{ count: number; windowStart: Date; expiresAt: Date }> {
+  const rows = await prisma.$queryRaw<Array<{ count: number; window_start: Date; expires_at: Date }>>`
+    INSERT INTO rate_limit_buckets (bucket_key, window_start, count, expires_at)
+    VALUES (${bucketKey}, now(), 1, now() + (${windowSeconds} || ' seconds')::interval)
+    ON CONFLICT (bucket_key) DO UPDATE SET
+      count = CASE
+        WHEN rate_limit_buckets.expires_at <= now() THEN 1
+        ELSE rate_limit_buckets.count + 1
+      END,
+      window_start = CASE
+        WHEN rate_limit_buckets.expires_at <= now() THEN now()
+        ELSE rate_limit_buckets.window_start
+      END,
+      expires_at = CASE
+        WHEN rate_limit_buckets.expires_at <= now() THEN now() + (${windowSeconds} || ' seconds')::interval
+        ELSE rate_limit_buckets.expires_at
+      END
+    RETURNING count, window_start, expires_at
+  `;
+  const row = rows[0];
+  return {
+    count: Number(row.count),
+    windowStart: row.window_start,
+    expiresAt: row.expires_at,
+  };
+}
+
+/**
  * 逐层检查；返回最严格的一层结果（剩余最少的那个）。
  * `keys` 里空值会被跳过（例如拿不到 IP 时只剩产品与端点两层）。
  */

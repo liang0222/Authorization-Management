@@ -12,6 +12,7 @@ import {
   verifyCsrf,
   type SessionContext,
 } from "@/lib/auth/session";
+import { observeAuthzFailure } from "@/lib/services/security-alerts";
 
 export interface AdminScope {
   session: SessionContext;
@@ -48,13 +49,35 @@ export async function withAdmin(
       meta.requestId,
     );
   }
-  if (MUTATING.has(meta.method) && !verifyCsrf(req, session)) {
+  const current = session;
+  /**
+   * 越权探测计数：403（权限不足 / CSRF）与跨租户 404 都算。
+   *
+   * 只旁路观察：`observeAuthzFailure` 内部吞掉所有异常，且这里不 await，
+   * 不让审计/告警拖慢原本应该在毫秒级返回的拒绝响应。
+   */
+  const observeAuthz = (status: number) => {
+    void observeAuthzFailure({
+      organizationId: current.organization.id,
+      userId: current.user.id,
+      userEmail: current.user.email,
+      ip: meta.ip,
+      status,
+      method: meta.method,
+      path: new URL(req.url).pathname,
+      requestId: meta.requestId,
+      userAgent: meta.userAgent,
+    });
+  };
+  if (MUTATING.has(meta.method) && !verifyCsrf(req, current)) {
+    observeAuthz(ERROR_STATUS.CSRF_FAILED);
     return toErrorResponse(
       new ApiError(ERROR_STATUS.CSRF_FAILED, "CSRF_FAILED", "CSRF 校验失败，请刷新页面后重试"),
       meta.requestId,
     );
   }
-  if (permission && !session.permissions.has(permission)) {
+  if (permission && !current.permissions.has(permission)) {
+    observeAuthz(403);
     return toErrorResponse(
       new ApiError(403, "FORBIDDEN", `当前角色缺少权限：${permission}`),
       meta.requestId,
@@ -62,13 +85,15 @@ export async function withAdmin(
   }
   try {
     return await handler({
-      session,
+      session: current,
       requestId: meta.requestId,
       ip: meta.ip,
       userAgent: meta.userAgent,
       method: meta.method,
     });
   } catch (error) {
+    const status = error instanceof ApiError ? error.status : 500;
+    if (status === 403 || status === 404) observeAuthz(status);
     return toErrorResponse(error, meta.requestId);
   }
 }
