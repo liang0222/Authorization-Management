@@ -10,8 +10,9 @@
 续费/暂停/解绑/撤销 → 审计留痕」全链路，并新增「备份与灾备」（多目标备份 → 加密 →
 上传 → 回读校验 → 隔离恢复演练）。类型检查 0 错、构建 106/106 静态页、302 单元、
 12 集成、16 端到端（实测 14 过 2 失败，见 2.1 表末两行与第 2.3 节）。
-另有两条**已知缺陷**必须先知道：干净安装后 `npm run build` 会失败（`cpu-features` 原生 addon，
-见 2.2 表末行），2 条备份 E2E 在纯净种子下必失败（见 2.2 表）。
+另有**一条已知缺陷**必须先知道：2 条备份 E2E 在纯净种子下必失败（见 2.2 表）。
+（原先「干净安装后 build 必失败」那条已在阶段 0.5 修复：`turbopack.resolveAlias` 把 `cpu-features`
+指到构建期替身，见 2.2 表末行与 [`test-report.md`](test-report.md) 第 1.1 节。）
 
 ---
 
@@ -22,7 +23,7 @@
 | 项 | 状态 | 怎么验的 |
 | --- | --- | --- |
 | `npx tsc --noEmit` | 0 错误 | 每批改动后执行 |
-| `npm run build` | 106/106 静态页 | 生产构建实测（`Generating static pages (106/106)`；路由表 132 条 = 40 ○ + 5 ◐ + 87 ƒ）。**注意：这是现有依赖树的结果**——干净副本上 `npm install`/`npm ci` 后 build 会失败，见 2.2 表「干净安装后 build 必失败」 |
+| `npm run build` | 106/106 静态页 | 生产构建实测（`Generating static pages (106/106)`；路由表 132 条 = 40 ○ + 5 ◐ + 87 ƒ）。**干净副本 `npm ci` 后同样通过**（阶段 0.5 修复后实测，见 2.2 表末行） |
 | 单元测试 | 302 passed (22 files) | `npx vitest run`（含备份加解密 / 状态判定 / cron 校验 / 安装器契约） |
 | 集成测试 | 12 passed | `npx vitest run -c vitest.integration.config.ts`，真实 HTTP + PostgreSQL；**必须干净种子**，脏库会让「并发激活」那条偶发 422 |
 | 端到端 | 16 tests in 7 files，实测 **14 passed / 2 failed** | `npx playwright test`（桌面 + Pixel 7，含只读角色 1 条）。失败的两条是 `tests/e2e/05-backups.spec.ts` 的「被策略引用的目标不允许直接删除」与「立即备份 → 完整性校验 → 隔离恢复演练」——它们假设库里已有备份目标/策略，而 `prisma/seed.ts` 不建备份数据，纯净种子下必然失败（详见第 2.3 节） |
@@ -47,7 +48,7 @@
 | Firefox / WebKit | 只跑 Chromium | `npx playwright install firefox webkit` 后在 config 加 project |
 | 2 条备份 E2E 在纯净种子下必失败 | 用例假设库里已有备份目标/策略，`prisma/seed.ts` 不建备份数据 | 给 `prisma/seed.ts` 补一个本地暂存目标 + 一条策略，或让用例自己 `request.post` 建前置数据 |
 | `npm run db:reset` 脚本失效 | `prisma migrate reset --force --skip-seed` 在 Prisma 7.10.1 报 `unknown or unexpected option: --skip-seed`（exit 1） | 改成 `prisma migrate reset --force`（会连带跑 seed），或删掉 `--skip-seed` 参数 |
-| **干净安装后 `npm run build` 必失败** | `cpu-features` 是 `ssh2` 的 optionalDependency，带原生 addon `build/Release/cpufeatures.node`；干净 `npm install`/`npm ci` 会装上并编译成功，Turbopack 打包 `ssh2`（经 `src/lib/services/backup/adapters/sftp.ts` → `src/instrumentation.ts`）时报 `non-ecmascript placeable asset`。本机 node_modules 里没有这个包（当初编译失败被跳过）才侥幸能 build | 已试无效：`serverExternalPackages`、`npm install --omit=optional`（会连带移除 `pg` 的 optional 依赖 `pg-cloudflare`，改报 `Module not found: Can't resolve 'pg-cloudflare'`）。未试：`turbopack.rules` 单独标 external、`overrides`/锁文件层面只剔除这一个包。属构建配置改动，不在阶段 0 范围；复现与日志见 [`test-report.md`](test-report.md) 第 1.1 节 |
+| ~~干净安装后 `npm run build` 必失败~~ **已修复（阶段 0.5）** | `cpu-features` 是 `ssh2` 的 optionalDependency，带原生 addon `build/Release/cpufeatures.node`；干净 `npm ci` 会装上并编译成功，Turbopack 打包 `ssh2`（经 `src/lib/services/backup/adapters/sftp.ts` → `src/instrumentation.ts`）时报 `non-ecmascript placeable asset` | 修法：`next.config.ts` 里 `turbopack.resolveAlias` 把 `cpu-features` 指到 `src/lib/shims/cpu-features-noop.cjs`（返回 `undefined`），等价于「该可选包不存在」，加密回退纯 JS。**不要再试**：`serverExternalPackages` 无效；`--omit=optional` 会连带移除 `pg-cloudflare` 改报 `Module not found`。干净副本 `npm ci` → build exit 0 / 106 静态页 / 302 单元 / SFTP 真实往返全 PASS，见 [`test-report.md`](test-report.md) 第 1.1 节 |
 
 ### 2.3 数字口径（2026-11 实测，复跑即可核对）
 

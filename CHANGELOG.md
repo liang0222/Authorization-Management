@@ -10,6 +10,27 @@ Release Note、commit、迁移 ID 与回滚方式。
 
 ## [Unreleased]
 
+### 构建 · 干净安装不再因 `cpu-features` 构建失败（阶段 0.5）
+
+上一轮（阶段 0）如实登记过一个阻断项：干净副本 `npm install` / `npm ci` 之后 `npm run build`
+必然失败，报 `./node_modules/cpu-features/lib/index.js  Error: non-ecmascript placeable asset`。
+本轮修掉：
+
+- **根因**：`cpu-features` 是 `ssh2` 的 optionalDependency，`lib/index.js` 静态
+  `require('../build/Release/cpufeatures.node')`；干净安装会编译出这个原生 addon，
+  Turbopack 无法把 node addon 放进 ESM chunk。本机 `node_modules` 恰好缺该包，所以一直"侥幸"能构建。
+- **修法**：`next.config.ts` 增加 `turbopack.resolveAlias`，把 `cpu-features` 指向构建期替身
+  `src/lib/shims/cpu-features-noop.cjs`（`module.exports = () => undefined`）。`ssh2` 的调用点是
+  `try { cpuInfo = require('cpu-features')() } catch {}`，`cpuInfo` 只影响 cipher 列表微调，
+  返回 `undefined` 等价于「该可选包不存在」——即本机既有行为，不是降级。
+  `package.json` / `package-lock.json` 未改，`ssh2`、`pg` 均未动。
+- **验证**：隔离副本 `npm ci`（exit 0，装了 `cpu-features`）→ `npm run build` exit 0 / 106 静态页；
+  `npx tsc --noEmit` exit 0；`npm run test` 302 passed (22 files)；`node -e "require('ssh2')"` 正常；
+  对着临时 `atmoz/sftp` 容器跑 `SftpAdapter` 的连接+主机指纹 / 建目录 / 上传 / 下载比对 / 删除五步全 PASS，
+  `put`→`get`→`remove` 内容一致；构建产物 `next start` 起在 3013（专用库）`/health/ready` 200。
+- 记录更新：`docs/test-report.md` §1.1 从「未修」改为「已修复」并保留复现档案，
+  `docs/handoff.md` §1/§2.1/§2.2、`README.md` §1.2 同步。
+
 ### 文档 · 数字与实测对账
 
 上线前把文档里的数量类表述全部按本轮实测重写，并补上一直漏掉的 Prisma Client 生成步骤：
@@ -32,7 +53,7 @@ Release Note、commit、迁移 ID 与回滚方式。
   `POST /v1/server/licenses/check`，它一直在契约与实现里）；`docs/test-report.md` 的
   `backup.test.ts` 用例数 15 → 26 并补齐后三组（`backupObjectKey` / WebDAV MKCOL / 上传重试）；
   `04-routes.spec.ts` 覆盖路由 21/22 → 23 条；导航遍历 17 → 16 项。
-- **如实记录一个更严重的构建缺陷（未修）**：干净副本上 `npm install` / `npm ci` 之后
+- **如实记录一个更严重的构建缺陷**（阶段 0 时未修，**阶段 0.5 已修复**，见上方「构建 · 干净安装不再因 `cpu-features` 构建失败」）：干净副本上 `npm install` / `npm ci` 之后
   `npm run build` **必然失败**，报
   `./node_modules/cpu-features/lib/index.js  Error: non-ecmascript placeable asset`。
   `cpu-features` 是 `ssh2` 的 optionalDependency，带原生 addon `cpufeatures.node`；SFTP 备份适配器

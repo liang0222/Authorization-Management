@@ -59,14 +59,17 @@ npm run db:seed        # 重建演示数据
 > 刻意不使用通用的 `DATABASE_URL`——本机存在其它项目的 `.env`，用通用名会被污染成
 > 别处的数据库地址。要改地址就设 `LICENSE_DB_URL`。
 
-> **已知缺陷（2026-11 实测，未修）**：干净环境里 `npm install` 之后 `npm run build` 会失败，
-> 报 `./node_modules/cpu-features/lib/index.js  Error: non-ecmascript placeable asset`。
-> 该包是 `ssh2` 的 optionalDependency，带原生 addon，Turbopack 打包 `ssh2`（SFTP 备份适配器 →
-> `src/instrumentation.ts`）时踩到它。本机 `node_modules` 里恰好没有这个包，所以构建能过。
-> `typecheck` / `test` / 集成测试不受影响（干净副本上实测 0 错、302 单元、12 集成全绿）。
-> 临时绕过：删掉 `node_modules/cpu-features` 再 build；`serverExternalPackages` 与
-> `--omit=optional` 都实测无效（后者会连带移除 `pg-cloudflare`）。
-> 复现步骤与完整报错见 [`docs/test-report.md`](docs/test-report.md) 第 1.1 节。
+> **构建期替身（阶段 0.5 修复，2026-11）**：`ssh2` 的 optionalDependency `cpu-features` 带原生 addon
+> `build/Release/cpufeatures.node`，干净 `npm install` / `npm ci` 会把它装上并编译成功；Turbopack 打包
+> `ssh2`（SFTP 备份适配器 → `src/instrumentation.ts`）时无法把原生 addon 放进 ESM chunk，报
+> `non-ecmascript placeable asset`，**build 失败**。
+> 修法：`next.config.ts` 的 `turbopack.resolveAlias` 把 `cpu-features` 指向构建期替身
+> [`src/lib/shims/cpu-features-noop.cjs`](src/lib/shims/cpu-features-noop.cjs)（一个返回 `undefined` 的函数）。
+> `ssh2` 的调用点是 `try { require('cpu-features')() } catch {}`，替身等价于「该可选包不存在」，
+> 加密实现回退到纯 JS —— 与不装该包时行为一致，SFTP 功能不受影响
+> （已用真实 SFTP 服务器验证：主机指纹 + 建目录 + 上传 + 下载比对 + 删除五步全 PASS）。
+> `serverExternalPackages` 与 `--omit=optional` 实测无效（后者会连带移除 `pg-cloudflare`），不要回头再试。
+> 复现记录与修复前后对比见 [`docs/test-report.md`](docs/test-report.md) 第 1.1 节。
 
 ### 1.3 起服务
 

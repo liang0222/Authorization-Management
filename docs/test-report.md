@@ -22,7 +22,7 @@ Playwright 1.64.1（Chromium 1248）
 | --- | --- | --- | --- |
 | 类型检查 | `npm run typecheck`（= `tsc --noEmit`） | **0 错误** | ~20s |
 | OpenAPI lint | `npm run lint:openapi` | **通过**（结构 / schema / servers / 凭证泄漏 / YAML↔JSON 同步） | ~1s |
-| 生产构建 | `npm run build` | **成功，106/106 静态页**；路由表 132 条 = 40 ○ + 5 ◐ + 87 ƒ（仅限现有依赖树，见 1.1） | ~50s |
+| 生产构建 | `npm run build` | **成功，106/106 静态页**；路由表 132 条 = 40 ○ + 5 ◐ + 87 ƒ（干净副本 `npm ci` 后同样通过，见 1.1） | ~50s |
 | 单元测试 | `npm run test`（= `npx vitest run`） | **302 passed (22 files)** | 3.1s |
 | 集成测试 | `npx vitest run -c vitest.integration.config.ts` | **12 passed** | 15.4s |
 | 端到端 | `npx playwright test` | **16 tests in 7 files：14 passed / 2 failed** | 2.7m |
@@ -30,8 +30,8 @@ Playwright 1.64.1（Chromium 1248）
 > 端到端那 2 条失败见第 4 节末尾「纯净种子下的两条失败」——是真实差异，不是环境噪音。
 > 上一版写「16 passed」是在跑过多轮 e2e 的脏库上得到的。
 >
-> 生产构建那一行是**现有依赖树**的结果。本轮另建的干净副本上 `npm install` / `npm ci` 后
-> build 会失败（Turbopack 打包 `ssh2` → `cpu-features` 原生 addon），见 1.1 节。
+> 生产构建那一行在**现有依赖树**与**干净副本**（`npm ci` 全新安装）上都通过了。
+> 干净安装曾因 `ssh2` → `cpu-features` 原生 addon 必然失败，阶段 0.5 已修复，复现与验证见 1.1 节。
 
 数字口径（都可直接复跑）：
 
@@ -44,7 +44,11 @@ Playwright 1.64.1（Chromium 1248）
 | 页面 49 | `find src/app -name 'page.tsx' \| wc -l` |
 | API 路由 74 / route handler 82 | `find src/app/api -name 'route.ts' \| wc -l` / `find src/app -name 'route.ts' \| wc -l` |
 
-### 1.1 干净安装后 `npm run build` 会失败（本轮实测，未修）
+### 1.1 干净安装后 `npm run build` 会失败（阶段 0 实测，阶段 0.5 已修复）
+
+> **现状（阶段 0.5 之后）**：干净副本 `git archive` → `npm ci`（exit 0，装了 `cpu-features` 并编译出
+> `cpufeatures.node`）→ `npx prisma generate` → `npm run build` **exit 0，106/106 静态页**。
+> 修法见本节末尾「修复」；下面保留阶段 0 的复现记录，作为该缺陷的档案。
 
 上面「生产构建成功」那一行是在**本机现有 `node_modules`** 上跑出来的。为了验证「新克隆一台机器能不能起来」，
 本轮另建了两份隔离副本（`git archive HEAD` + 打上本轮文档 diff），分别用 `npm install` 和 `npm ci` 全新安装，
@@ -102,14 +106,39 @@ Import traces:
      即 `--omit=optional` 不能作为整体方案。
   3. `.npmrc` 写 `optional=false` 与 2 同因同果（都是全局关闭 optional 依赖），不解决。
 
-  尚未试的方向：在 `turbopack.rules` 里单独把 `cpu-features` 标成 external，
-  或用 `overrides` / 锁文件层面只剔除这一个包。两条都属构建配置改动，
-  **本轮（阶段 0，只做文档对账）不动**，登记在此供后续阶段处理。
+**修复（阶段 0.5）**：用 Next 16 支持的 `turbopack.resolveAlias` 在**构建期**把 `cpu-features`
+替换成空实现，node_modules 与锁文件都不动：
+
+```ts
+// next.config.ts
+turbopack: {
+  resolveAlias: { "cpu-features": "./src/lib/shims/cpu-features-noop.cjs" },
+  rules: { "*.css": { loaders: ["@tailwindcss/turbopack"], as: "*.css" } },
+}
+```
+
+替身内容就一行 `module.exports = () => undefined;`。能这样修的前提是 `ssh2` 的调用点本身是
+`try { cpuInfo = require('cpu-features')(); } catch {}`（`node_modules/ssh2/lib/protocol/constants.js:5-8`），
+`cpuInfo` 只用来微调 cipher 列表（`constants.js:93` / `:99`）。返回 `undefined` 等价于「该可选包不存在」，
+也就是**本机当前依赖树下的既有行为**，不是新引入的降级。
+
+验证（隔离副本 `/root/s05`，全新 `npm ci` 装出 `cpu-features` 与 `cpufeatures.node`）：
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm ci` | exit 0（1038 packages，仍会装 `cpu-features@0.0.10`） |
+| `npm run build`（修复前） | **exit 1**，`non-ecmascript placeable asset` |
+| `npm run build`（修复后） | **exit 0**，`✓ Compiled successfully in 3.7s`，`✓ Generating static pages (106/106)` |
+| 产物核对 | `.next` 中 `cpufeatures.node` 仅出现在 sourcemap 里；14 个产物文件引到替身 `cpu-features-noop` |
+| `npx tsc --noEmit` | exit 0 |
+| `npm run test` | `Test Files 22 passed (22) / Tests 302 passed (302)` |
+| ssh2 加载 | `node -e "require('ssh2')"` → `Client= function Server= function utils= object` |
+| SFTP 真实往返 | 对着临时 `atmoz/sftp` 容器：连接+主机指纹 / 建目录 / 上传 / 下载比对 / 删除 五步全 OK；`put`→`get`→`remove` 内容一致 |
+| 构建产物运行 | `next start` 起在 3013（专用库）：`/health/ready` 200，`/login` 200 —— 说明 bundle 里 `ssh2` 的 `constants.js` 在替身下正常求值 |
 
 **对本节其它结论的影响**：`typecheck`、`lint:openapi`、`test`、集成测试在干净副本上都是绿的
-（302 单元 / 12 集成，与主仓库一致），只有 `build` 这一环受上述缺陷影响。主仓库当前 `.next` 是
-在缺 `cpu-features` 的依赖树上构建的，所以「生产构建成功」这个结论本身成立，但**不能据此认为
-「新机器照 README 装完就能 build」**。
+（302 单元 / 12 集成，与主仓库一致）。修复后 `build` 在干净安装与现有依赖树上都能过，
+「新机器照 README 装完就能 build」这一条**现在成立**。
 
 ---
 
