@@ -95,17 +95,15 @@ export async function register() {
   }
 
   /**
-   * 后台任务要等装完再起。
+   * 后台任务：只看数据库是否就绪，不再看安装器状态（阶段 3）。
    *
-   * 全新实例上这两条循环一启动就会查 `webhook_deliveries` / `backup_policies`，
-   * 而那时表还没建（安装器要等用户提交表单才跑迁移），于是每 5 秒往日志里刷一条
-   * `TableDoesNotExist`。日志里混着这种「预期内的报错」，真出问题时反而看不见。
-   *
-   * 判定只看安装锁文件（纯 fs，不连库）：装完 `finalize` 会写锁，
-   * 随后 `/api/install/run` 的成功分支会调用 `startBackgroundWorkers()` 补起。
+   * 迁移没跑完时这两条循环会每 5 秒刷一条 `TableDoesNotExist`，所以闸门仍要挡；
+   * 但判据换成「库连得上 + 这两张表在不在」，与 installer 是否 adopted / INSTALLED 无关。
+   * 表跑起来之后重启即自动拉起，不需要安装器再回头调用 `startBackgroundWorkers()`。
    */
-  if (!backgroundWorkersAllowed()) {
-    console.log("[boot] 尚未安装，跳过后台任务（安装完成后自动启动）");
+  const workers = await backgroundWorkersAllowed();
+  if (!workers.allowed) {
+    console.log(`[boot] 后台任务未启动：${workers.detail}`);
     return;
   }
 
