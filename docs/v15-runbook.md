@@ -117,6 +117,43 @@ npx prisma migrate deploy
 
 每目标状态：`queued → uploading → uploaded → verifying → verified`，失败为 `failed`，未参与为 `skipped`。只有 `verified` 才算备份成功。
 
+#### 4.1.1 明文 http 目标需要双重确认（阶段 4）
+
+**为什么**：`tls_verify` 原本只是「要不要校验证书」的开关，但旧实现把它当成了「我同意明文过网」的授权书——生产环境只要把目标上的 `tls_verify` 设成 `false`，任何 http 端点都会被放行。上面那个 `offsite-webdav-remote` 就是这种形态：`http://[OFFSITE_HOST]:5244/dav`，每次备份 Basic Auth 的用户名口令都明文过网（备份体本身是 `ZMBK1` AES 信封，内容不泄露，凭据会泄露）。
+
+现在生产环境（`DEPLOYMENT_ENV=production`）下，**非回环**的 http 目标必须同时满足两条才允许保存与执行：
+
+| 条件 | 位置 | 说明 |
+| --- | --- | --- |
+| `tls_verify = false` | 目标配置 | 「这个端点确实只有 http」 |
+| `ALLOW_INSECURE_BACKUP_HTTP=true` | 服务环境变量（`/etc/licensing-saas/production.env`） | 「部署方明确接受这条链路的明文风险」 |
+
+- 缺任一条：**创建/更新接口返回 400**（`INSECURE_HTTP_NOT_CONFIRMED`，文案里点名缺哪一条）。
+- 存量目标在执行期遇到不合规：**该目标被跳过**（`backup_job_targets.status = skipped`，`error_code = INSECURE_HTTP_NOT_CONFIRMED`，`error_message` 写原因），整次作业标 **`degraded`**（`error_code = BACKUP_TARGET_INSECURE_SKIPPED`），其它合规目标照常完成。**不会静默用明文发出去，也不会一刀切中断备份。**
+- 回环地址（`localhost` / `127.0.0.0/8` / `::1` / `0.0.0.0`）、https 目标、以及非生产环境都不受影响。
+- 双重确认放行的目标在保存（创建/更新）时写一条审计：`action = backup.target_insecure_accepted`，`resource_id` 是目标 id，`after` 里只有主机名与 `confirmed_by`，不含任何凭据。
+
+**上线检查：现网有没有被放行的明文目标？**（只读，随时可跑）
+
+```sql
+-- 非回环的 http 目标（会被新规则约束的全部对象）
+SELECT name, provider_type, endpoint_url, tls_verify, enabled
+FROM backup_storage_destinations
+WHERE endpoint_url ILIKE 'http://%'
+  AND endpoint_url !~* '^http://(localhost|127\.[0-9.]+|\[::1\]|0\.0\.0\.0)'
+ORDER BY priority;
+
+-- 历史上谁按下了「我接受明文」：看审计
+SELECT created_at, actor_id, resource_id, after
+FROM audit_logs
+WHERE action = 'backup.target_insecure_accepted'
+ORDER BY created_at DESC;
+```
+
+查询结果里 `tls_verify = false` 的那些目标，就是「新代码上线后需要 `ALLOW_INSECURE_BACKUP_HTTP=true` 才能继续跑」的清单；不设该变量时它们会被跳过、作业降级（见 `docs/handoff.md` §2.4 的部署影响）。
+
+**补救（推荐路径）**：给端点配 HTTPS 反代 → 把 `endpoint_url` 改成 `https://…` → 把 `tls_verify` 改回 `true` → 去掉 `ALLOW_INSECURE_BACKUP_HTTP`。徽章消失、目标恢复 `verified`。
+
 ### 4.2 加密
 
 备份文件是信封加密的（魔数 `ZMBK1` + IV + GCM tag），密钥来自 `BACKUP_ENCRYPTION_KEY`。**没有这个密钥，备份文件无法恢复**。它必须与备份文件分开保管。
@@ -247,7 +284,7 @@ systemctl start licensing-saas licensing-saas-sandbox
    `offsite-webdav-remote`，策略 `daily-production` 每日 03:00 全量跑，五目标 `all_required`。详见 §4.1。
    ✅ 其中 `offsite-webdav-remote`（`[OFFSITE_HOST]:5244`）是**独立公网主机**，真正异地，规格 24 由此满足。
    ⚠️ 前四个仍跑在本机 Docker 容器里（覆盖多协议链路，不解决整机损毁）；该外部端点只有明文 HTTP，
-   目标是显式 `tlsVerify: false` 放行的，Basic Auth 凭据会明文过网（备份体本身是 AES 加密信封）。
+   目标原来靠显式 `tlsVerify: false` 放行，Basic Auth 凭据会明文过网（备份体本身是 AES 加密信封）；阶段 4 起还需 `ALLOW_INSECURE_BACKUP_HTTP=true` 才允许继续执行，见 §4.1.1。
 
 ### 7.4 密钥轮换手册
 

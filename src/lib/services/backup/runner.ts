@@ -4,6 +4,8 @@ import { encryptBackup, sha256Hex } from "./crypto";
 import { pgDump, restoreIntoScratch } from "./pg";
 import { writeStagingFile, readStagingFile } from "./dump";
 import { createAdapter, type AdapterRow } from "./factory";
+import { evaluateInsecureHttpTarget } from "./insecure-http";
+import { config } from "@/lib/config";
 import type { StorageAdapter } from "./types";
 import { writeAudit } from "@/lib/domain/audit";
 import { notifyBackupIssue } from "./alerts";
@@ -243,6 +245,34 @@ async function uploadToTarget(
   return { ok: false, error: "上传重试耗尽" };
 }
 
+/**
+ * 记录一个被跳过的目标（阶段 4）。
+ *
+ * 为什么是「跳过 + degraded」而不是直接失败：
+ * 存量目标可能已经在用（现网就有 `http://<公网主机>:5244/dav`），上线新规则时
+ * 直接把它算成失败会把「别的目标都备份成功了」也一并抹掉，误导排障方向；
+ * 但也不能静默用明文发出去。所以：该目标 `skipped` 且写明原因，整次作业降级，
+ * 别的合规目标照常完成 —— 既逼着迁移，又不中断备份。
+ */
+async function skipInsecureTarget(
+  jobId: string,
+  organizationId: string,
+  plan: TargetPlan,
+  reason: string,
+): Promise<void> {
+  await prisma.backup_job_targets.create({
+    data: {
+      organization_id: organizationId,
+      job_id: jobId,
+      destination_id: plan.destinationId,
+      status: "skipped",
+      error_code: "INSECURE_HTTP_NOT_CONFIRMED",
+      error_message: reason.slice(0, 400),
+    },
+  });
+  console.warn("[backup] 跳过明文 http 目标（未完成双重确认）", { destination: plan.name, reason });
+}
+
 export async function runBackup(input: RunBackupInput): Promise<RunBackupResult> {
   const policyId = input.policyId ?? null;
   const policy = policyId
@@ -285,7 +315,21 @@ export async function runBackup(input: RunBackupInput): Promise<RunBackupResult>
     });
 
     const outcomes: Array<{ isRequired: boolean; ok: boolean; priority: number }> = [];
+    const skipped: Array<{ name: string; reason: string }> = [];
     for (const plan of plans) {
+      const guard = evaluateInsecureHttpTarget({
+        deploymentEnv: config.deploymentEnv,
+        endpointUrl: plan.row.endpoint_url,
+        tlsVerify: plan.row.tls_verify,
+      });
+      if (!guard.allowed) {
+        const reason = guard.reason ?? "明文 http 备份目标未完成双重确认";
+        await skipInsecureTarget(job.id, input.organizationId, plan, reason);
+        outcomes.push({ isRequired: plan.isRequired, ok: false, priority: plan.priority });
+        targetResults.push({ destinationId: plan.destinationId, name: plan.name, status: "skipped", error: reason });
+        skipped.push({ name: plan.name, reason });
+        continue;
+      }
       const result = await uploadToTarget(job.id, input.organizationId, plan, backupId, encrypted.body, encrypted.sha256);
       outcomes.push({ isRequired: plan.isRequired, ok: result.ok, priority: plan.priority });
       targetResults.push({
@@ -296,15 +340,29 @@ export async function runBackup(input: RunBackupInput): Promise<RunBackupResult>
       });
     }
 
-    const status = decideJobStatus(
+    const decided = decideJobStatus(
       policy?.target_mode ?? "all_required",
       outcomes,
       policy?.required_success_count ?? null,
     );
+    // 有目标被「跳过」时，即便其余目标全成功也不能算 succeeded：
+    // 少了一份异地副本却报绿，是最危险的那种静默降级。
+    // 但若本来就已经 failed（全都失败），就保留 failed —— 那更能说明问题。
+    const status = skipped.length > 0 && decided !== "failed" ? "degraded" : decided;
+    const skipMessage =
+      skipped.length > 0
+        ? `已跳过 ${skipped.length} 个明文 http 目标（未完成双重确认）：${skipped
+            .map((item) => `${item.name}（${item.reason}）`)
+            .join("; ")}`.slice(0, 1000)
+        : null;
 
     await prisma.backup_jobs.update({
       where: { id: job.id },
-      data: { status, finished_at: new Date() },
+      data: {
+        status,
+        finished_at: new Date(),
+        ...(skipMessage ? { error_code: "BACKUP_TARGET_INSECURE_SKIPPED", error_message: skipMessage } : {}),
+      },
     });
 
     await writeAudit({
@@ -314,7 +372,13 @@ export async function runBackup(input: RunBackupInput): Promise<RunBackupResult>
       action: "backup.run",
       resourceType: "backup_job",
       resourceId: job.id,
-      after: { backup_id: backupId, status, size_bytes: staging.sizeBytes, targets: plans.length },
+      after: {
+        backup_id: backupId,
+        status,
+        size_bytes: staging.sizeBytes,
+        targets: plans.length,
+        skipped_insecure: skipped.length,
+      },
     });
 
     // 告警放在编排层而不是各个调用点：手动「立即备份」、定时调度、单目标重传
@@ -322,7 +386,9 @@ export async function runBackup(input: RunBackupInput): Promise<RunBackupResult>
     // 之前只有 scheduler 里调了 notifyBackupIssue，从后台点「立即备份」失败时
     // 只弹一个 422，审计里一行记录都没有。
     if (status === "failed" || status === "partial" || status === "degraded") {
-      const failedTargets = targetResults.filter((item) => item.status === "failed");
+      // 被跳过的目标同样是「这次没备到」，一起进告警文案：只报 failed 会让
+      // 「一个目标被跳过、其余成功」的降级作业在通知里看起来像无事发生。
+      const failedTargets = targetResults.filter((item) => item.status === "failed" || item.status === "skipped");
       await notifyBackupIssue({
         organizationId: input.organizationId,
         status,

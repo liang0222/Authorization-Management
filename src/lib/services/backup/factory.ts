@@ -5,6 +5,7 @@ import { S3Adapter } from "./adapters/s3";
 import { WebDavAdapter } from "./adapters/webdav";
 import { SftpAdapter } from "./adapters/sftp";
 import { BackupAdapterError, type StorageAdapter } from "./types";
+import { evaluateInsecureHttpTarget } from "./insecure-http";
 import { config } from "@/lib/config";
 
 /** 数据库行到适配器的映射（只做映射，不做业务判断）。 */
@@ -71,6 +72,21 @@ export async function createAdapter(row: AdapterRow, organizationId: string): Pr
   const remotePrefixOnly = (row.remote_prefix ?? "").replace(/^\/+|\/+$/g, "") || `backups/${config.deploymentEnv}`;
   const prefix = joinRemotePrefix(row.root_path);
 
+  // 明文 http 的双重确认（阶段 4）：生产环境下 http + 非回环，必须同时满足
+  // `tls_verify=false` 与 `ALLOW_INSECURE_BACKUP_HTTP=true` 才允许建适配器。
+  // 放在最前面、对所有 provider 生效，是因为 S3 兼容端点同样可能是 http，
+  // 只在 WebDAV 分支里拦会留下一个绕过口子。
+  // 执行期（runner）会先判一次并跳过目标；这里再判一次是兜底：
+  // 万一有人从重传/恢复演练等别的入口建适配器，也不会把凭据明文发出去。
+  const insecureGuard = evaluateInsecureHttpTarget({
+    deploymentEnv: config.deploymentEnv,
+    endpointUrl: row.endpoint_url,
+    tlsVerify: row.tls_verify,
+  });
+  if (!insecureGuard.allowed) {
+    throw new BackupAdapterError("INSECURE_HTTP_NOT_CONFIRMED", insecureGuard.reason ?? "明文 http 备份目标未完成双重确认");
+  }
+
   const credential = row.credential_id
     ? await prisma.backup_storage_credentials.findFirst({
         where: { id: row.credential_id, organization_id: organizationId, revoked_at: null },
@@ -112,11 +128,12 @@ export async function createAdapter(row: AdapterRow, organizationId: string): Pr
         username: cred.username,
         password: cred.password,
         prefix,
-        // 生产默认只允许 https；操作者显式把 tlsVerify 设为 false（＝我确认这是内网/本机端点）
-        // 时才放行 http。放行后 WebDavAdapter 自己还会再检查一次：
-        // 非 https 且主机不是 localhost/127.0.0.1/::1 一律拒绝，所以公网 http 依然进不来。
-        // 两层的分工是：这里决定「生产要不要收紧」，适配器决定「这个地址本身能不能用 http」。
-        allowInsecureHttp: config.deploymentEnv !== "production" || row.tls_verify === false,
+        // 适配器这一层只回答「这个地址本身能不能用 http」，收不放宽由上面的 insecureGuard 决定：
+        // - 非生产：维持原行为；
+        // - 回环地址（localhost / 127.0.0.0/8 / ::1 / 0.0.0.0）：本来就是本机进程内通信，不受限；
+        // - 生产 + 非回环：只有 insecureGuard.allowed 为真（双重确认齐了）才会走到这里。
+        allowInsecureHttp:
+          config.deploymentEnv !== "production" || insecureGuard.loopback || row.tls_verify === false,
       });
     }
 

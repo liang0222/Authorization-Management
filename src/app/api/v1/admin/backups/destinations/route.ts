@@ -4,9 +4,11 @@ import { withAdmin } from "@/lib/auth/guard";
 import { cursorFields, ApiError, okResponse, readJson, readListQuery } from "@/lib/http/api";
 import { translatePrismaError } from "@/lib/http/db-errors";
 import { writeAudit } from "@/lib/domain/audit";
+import { config } from "@/lib/config";
 import { createCredential } from "@/lib/services/backup/credentials";
 import { destinationCreateSchema, requireFieldsForProvider } from "@/lib/services/backup/schemas";
 import { destinationRowDto } from "@/lib/services/backup/serialize";
+import { evaluateInsecureHttpTarget } from "@/lib/services/backup/insecure-http";
 
 /**
  * 存储目标列表与创建（规格 16.11.2 / 16.11.8）。
@@ -69,6 +71,22 @@ export async function POST(req: NextRequest) {
     });
     if (missing) throw new ApiError(400, "INVALID_REQUEST", missing, { field: "credential" });
 
+    // 明文 http 的双重确认（阶段 4）：生产环境保存非回环 http 目标时，
+    // 目标上的 tls_verify=false 与环境变量 ALLOW_INSECURE_BACKUP_HTTP=true 必须同时具备。
+    // 拦在保存阶段而不是等执行时才发现：配置能存进去、备份时才报错，是最难查的一类问题。
+    const insecureGuard = evaluateInsecureHttpTarget({
+      deploymentEnv: config.deploymentEnv,
+      endpointUrl: body.endpointUrl ?? null,
+      tlsVerify: body.tlsVerify ?? true,
+    });
+    if (!insecureGuard.allowed) {
+      throw new ApiError(400, "INSECURE_HTTP_NOT_CONFIRMED", insecureGuard.reason ?? "明文 http 备份目标未完成双重确认", {
+        field: "tlsVerify",
+        host: insecureGuard.host,
+        requires: ["tlsVerify=false", "ALLOW_INSECURE_BACKUP_HTTP=true"],
+      });
+    }
+
     try {
       const created = await prisma.$transaction(async (tx) => {
         const destination = await tx.backup_storage_destinations.create({
@@ -107,6 +125,28 @@ export async function POST(req: NextRequest) {
           include: INCLUDE_CREDENTIAL,
         });
       });
+
+      if (insecureGuard.needsAudit) {
+        // 「不合规但被双重确认放行」必须留痕：以后要查「谁允许了这条明文链路」时，
+        // 只有这条审计能回答。resource_id 指目标，after 里只写主机，不写任何凭据。
+        await writeAudit({
+          organizationId: session.organization.id,
+          actorType: "admin",
+          actorId: session.user.id,
+          action: "backup.target_insecure_accepted",
+          resourceType: "backup_storage_destination",
+          resourceId: created.id,
+          after: {
+            host: insecureGuard.host,
+            provider_type: created.provider_type,
+            tls_verify: created.tls_verify,
+            confirmed_by: "ALLOW_INSECURE_BACKUP_HTTP=true",
+          },
+          requestId,
+          ip,
+          userAgent,
+        });
+      }
 
       await writeAudit({
         organizationId: session.organization.id,

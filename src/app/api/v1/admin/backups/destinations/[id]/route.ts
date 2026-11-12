@@ -7,6 +7,8 @@ import { writeAudit } from "@/lib/domain/audit";
 import { createCredential, revokeCredential } from "@/lib/services/backup/credentials";
 import { destinationPatchSchema, requireFieldsForProvider } from "@/lib/services/backup/schemas";
 import { destinationRowDto } from "@/lib/services/backup/serialize";
+import { evaluateInsecureHttpTarget } from "@/lib/services/backup/insecure-http";
+import { config } from "@/lib/config";
 
 /**
  * 单个存储目标：读取、修改、删除（规格 16.11.2 / 16.11.8）。
@@ -65,6 +67,21 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     });
     if (missing) throw new ApiError(400, "INVALID_REQUEST", missing, { field: "credential" });
 
+    // 明文 http 的双重确认（阶段 4）：用「改完之后的值」判定，
+    // 否则把 https 目标改成 http、或把 tlsVerify 从 true 改成 false 都会绕过创建时的检查。
+    const insecureGuard = evaluateInsecureHttpTarget({
+      deploymentEnv: config.deploymentEnv,
+      endpointUrl,
+      tlsVerify: body.tlsVerify === undefined ? current.tls_verify : body.tlsVerify,
+    });
+    if (!insecureGuard.allowed) {
+      throw new ApiError(400, "INSECURE_HTTP_NOT_CONFIRMED", insecureGuard.reason ?? "明文 http 备份目标未完成双重确认", {
+        field: "tlsVerify",
+        host: insecureGuard.host,
+        requires: ["tlsVerify=false", "ALLOW_INSECURE_BACKUP_HTTP=true"],
+      });
+    }
+
     try {
       const updated = await prisma.$transaction(async (tx) => {
         if (body.credential) {
@@ -107,6 +124,27 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
           include: INCLUDE_CREDENTIAL,
         });
       });
+
+      if (insecureGuard.needsAudit) {
+        await writeAudit({
+          organizationId: session.organization.id,
+          actorType: "admin",
+          actorId: session.user.id,
+          action: "backup.target_insecure_accepted",
+          resourceType: "backup_storage_destination",
+          resourceId: current.id,
+          before: { host: current.endpoint_url ? new URL(current.endpoint_url).hostname : null, tls_verify: current.tls_verify },
+          after: {
+            host: insecureGuard.host,
+            provider_type: updated.provider_type,
+            tls_verify: updated.tls_verify,
+            confirmed_by: "ALLOW_INSECURE_BACKUP_HTTP=true",
+          },
+          requestId,
+          ip,
+          userAgent,
+        });
+      }
 
       await writeAudit({
         organizationId: session.organization.id,

@@ -1,4 +1,6 @@
 import { prisma } from "@/lib/db";
+import { evaluateInsecureHttpTarget } from "./insecure-http";
+import { config } from "@/lib/config";
 
 /**
  * 「备份与灾备」概览（规格 16.10 要求的那一块）。
@@ -24,7 +26,19 @@ export interface BackupOverview {
     finishedAt: string | null;
     rtoSeconds: number | null;
   } | null;
-  destinations: { total: number; enabled: number; healthy: number; failing: number; untested: number };
+  destinations: {
+    total: number;
+    enabled: number;
+    healthy: number;
+    failing: number;
+    untested: number;
+    /** http + 非回环的目标数（凭据会明文过网的那一类）。 */
+    plaintext: number;
+    /** 其中被双重确认放行的数量。 */
+    plaintextAccepted: number;
+    /** 其中当前条件不满足、执行期会被跳过的数量。 */
+    plaintextBlocked: number;
+  };
   jobs30d: { total: number; succeeded: number; failed: number; partial: number; degraded: number; successRate: number };
   totalSizeBytes: number;
   retention: unknown;
@@ -38,7 +52,7 @@ export async function buildBackupOverview(organizationId: string): Promise<Backu
   const [destinations, jobs30d, lastSuccess, lastFailure, lastVerified, lastRestore, policy, sizeSum] = await Promise.all([
     prisma.backup_storage_destinations.findMany({
       where: { organization_id: organizationId },
-      select: { enabled: true, last_test_status: true },
+      select: { enabled: true, last_test_status: true, endpoint_url: true, tls_verify: true },
     }),
     prisma.backup_jobs.findMany({
       where: { organization_id: organizationId, created_at: { gte: since } },
@@ -74,6 +88,15 @@ export async function buildBackupOverview(organizationId: string): Promise<Backu
       _sum: { size_bytes: true },
     }),
   ]);
+
+  // 明文 http 目标的现状（阶段 4）：概览页要能一眼看到「有几个目标会明文过网」。
+  const plaintextGuards = destinations.map((item) =>
+    evaluateInsecureHttpTarget({
+      deploymentEnv: config.deploymentEnv,
+      endpointUrl: item.endpoint_url,
+      tlsVerify: item.tls_verify,
+    }),
+  );
 
   const succeeded = jobs30d.filter((job) => job.status === "succeeded").length;
   const total = jobs30d.length;
@@ -120,6 +143,9 @@ export async function buildBackupOverview(organizationId: string): Promise<Backu
       healthy: destinations.filter((item) => item.last_test_status === "passed").length,
       failing: destinations.filter((item) => item.last_test_status === "failed").length,
       untested: destinations.filter((item) => item.last_test_status === "untested").length,
+      plaintext: plaintextGuards.filter((item) => item.plaintext).length,
+      plaintextAccepted: plaintextGuards.filter((item) => item.plaintext && item.targetConfirmed && item.envConfirmed).length,
+      plaintextBlocked: plaintextGuards.filter((item) => !item.allowed).length,
     },
     jobs30d: {
       total,

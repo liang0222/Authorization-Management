@@ -23,7 +23,7 @@ Playwright 1.64.1（Chromium 1248）
 | 类型检查 | `npm run typecheck`（= `tsc --noEmit`） | **0 错误** | ~20s |
 | OpenAPI lint | `npm run lint:openapi` | **通过**（结构 / schema / servers / 凭证泄漏 / YAML↔JSON 同步） | ~1s |
 | 生产构建 | `npm run build` | **成功，101/101 静态页**；路由表 127 条（干净副本 `npm ci` 后同样通过，见 1.1）。比阶段 2 少 5 条，是阶段 3 把 `/install` 与 `/api/install/*` 移出宿主 | ~50s |
-| 单元测试 | `npm run test`（= `npx vitest run`） | **227 passed (20 files)**；安装器另有 **108 passed (6 files)**，用 `npm run test:installer` 单独跑（阶段 3 把 6 个安装器测试文件移出宿主：335−108=227） | 3.0s |
+| 单元测试 | `npm run test`（= `npx vitest run`） | **252 passed (21 files)**；安装器另有 **108 passed (6 files)**，用 `npm run test:installer` 单独跑（335 − 108（阶段 3 移出安装器 6 个文件）= 227，阶段 4 新增备份明文护栏 25 条 = 252） | 3.0s |
 | 集成测试 | `npx vitest run -c vitest.integration.config.ts` | **12 passed** | 15.4s |
 | 端到端 | `npx playwright test` | **16 tests in 7 files：14 passed / 2 failed** | 2.7m |
 
@@ -37,7 +37,7 @@ Playwright 1.64.1（Chromium 1248）
 
 | 数字 | 命令 |
 | --- | --- |
-| 单元 227 / 20 文件 | `npx vitest run` → `Test Files 20 passed (20) / Tests 227 passed (227)`；`npm run test:installer` → `Test Files 6 passed (6) / Tests 108 passed (108)` |
+| 单元 252 / 21 文件 | `npx vitest run` → `Test Files 21 passed (21) / Tests 252 passed (252)`；`npm run test:installer` → `Test Files 6 passed (6) / Tests 108 passed (108)` |
 | 集成 12 / 1 文件 | `npx vitest run -c vitest.integration.config.ts`（先 `npm run db:seed`） |
 | 端到端 16 / 7 文件 | `npx playwright test --list` → `Total: 16 tests in 7 files`（含 1 条 setup） |
 | 静态页 101 | `npm run build` → `✓ Generating static pages using 3 workers (101/101)` |
@@ -485,12 +485,130 @@ TEST_BASE_URL=http://127.0.0.1:3017 TEST_PUBLIC_CLIENT_ID=pc_sandbox_desktop_4a9
 缺了回 400 `INVALID_REQUEST`）；激活限流 10 次/60 秒，连跑要等窗口；sandbox 部署必须用 sandbox 版 `client_id`
 （`pc_sandbox_desktop_4a91c7e3b2`），seed 与 server 也必须共用同一套 `SESSION_SECRET`/`LICENSE_HMAC_PEPPER`/`SECRETBOX_KEY`。
 
-## 2. 单元测试（227 个 / 20 个文件；阶段 3 前为 335/26，其中 108 条随安装器移入 `packages/universal-installer/tests`）
+### 1.5 备份明文通道双重确认（阶段 4 实测）
+
+原逻辑一行就破防：`allowInsecureHttp = DEPLOYMENT_ENV !== "production" || row.tls_verify === false`。
+生产里只要把目标的 `tls_verify` 设成 `false`，非回环的 `http://` WebDAV 就放行，Basic Auth 口令与备份内容
+全程明文过网——而 `tls_verify` 本来的语义只是「跳过证书校验」，不是「同意明文」。
+
+现在的判定集中在 `src/lib/services/backup/insecure-http.ts`（`evaluateInsecureHttpTarget`），
+保存接口（POST/PATCH）、执行器（runner）与页面 DTO 共用同一个函数，避免「页面说能跑、执行器却跳过」的口径分裂：
+
+| 目标 | 生产（`DEPLOYMENT_ENV=production`） | 非生产 |
+| --- | --- | --- |
+| `https://` / `sftp://` / `local` | 不受限 | 不受限 |
+| `http://` + 回环（`localhost`、`127.0.0.0/8`、`::1`、`0.0.0.0`） | 不受限 | 不受限 |
+| `http://` + 非回环 | 需 `tls_verify=false` **且** `ALLOW_INSECURE_BACKUP_HTTP=true`，缺任一 → 400 / 执行期跳过 | 放行（仍标 `plaintext`） |
+
+`ALLOW_INSECURE_BACKUP_HTTP` 只认精确字符串 `true`（`TRUE` / `1` / `yes` / 前后空格都不算），默认不设置。
+
+实测环境：隔离副本 `/root/s4`（`npm ci` + `prisma generate`），临时库 `licensing_s4`（seed 后把三个演示账号改成
+`@acme.test` 以通过阶段 2 的启动闸门），实例 A = 3019（**不带**该变量）、实例 B = 3018（`ALLOW_INSECURE_BACKUP_HTTP=true`），
+对端是本地 `bytemark/webdav` 容器（桥接地址 `172.17.0.3`，同时发布到 `127.0.0.1:19081` 用于回环对照）。两者都是
+`DEPLOYMENT_ENV=production` 的真实构建产物。
+
+**1.5.1 保存接口：缺条件 400，双条件齐 201**
+
+```
+# 实例 A（无变量）：http + 非回环，tls_verify 省略（默认 true）
+HTTP=400 {"code":"INSECURE_HTTP_NOT_CONFIRMED",
+ "message":"拒绝使用明文 http 备份目标：172.17.0.3 不是回环地址，生产环境需要双重确认，当前缺少 目标上显式 tls_verify=false 与 环境变量 ALLOW_INSECURE_BACKUP_HTTP=true。备份凭据会以明文过网；请改用 https（推荐），或同时补齐上面两项确认。",
+ "details":{"field":"tlsVerify","host":"172.17.0.3","requires":["tlsVerify=false","ALLOW_INSECURE_BACKUP_HTTP=true"]}}
+
+# 实例 A（无变量）：http + 非回环 + tls_verify=false
+HTTP=400 {"code":"INSECURE_HTTP_NOT_CONFIRMED",
+ "message":"拒绝使用明文 http 备份目标：172.17.0.3 不是回环地址，生产环境需要双重确认，当前缺少 环境变量 ALLOW_INSECURE_BACKUP_HTTP=true。…"}
+```
+
+```
+# 实例 B（ALLOW_INSECURE_BACKUP_HTTP=true）：同样参数
+HTTP=201 {"id":"bcd1ccc8-62ae-4c4f-8211-c855355501c4","name":"insecure-bridge",
+ "endpointUrl":"http://172.17.0.3","tlsVerify":false,
+ "insecureHttp":{"plaintext":true,"targetConfirmed":true,"envConfirmed":true,"accepted":true,"blocked":false,"reason":null}}
+```
+
+**1.5.2 放行即留痕（`audit_logs`）**
+
+```
+action                           | resource_id                          | actor_id                             | after_data
+backup.target_insecure_accepted  | bcd1ccc8-62ae-4c4f-8211-c855355501c4  | 28f297d9-2336-46a5-ac6f-1a9808889329 | {"host":"172.17.0.3","tls_verify":false,
+                                                                          "confirmed_by":"ALLOW_INSECURE_BACKUP_HTTP=true","provider_type":"webdav"}
+```
+
+`actor_id` 就是保存该目标的管理员（`owner@acme.test` 的用户 id）。注意：这次是「保存时」写审计，不是每次备份都写。
+
+**1.5.3 执行期：存量不合规目标被跳过，作业 `degraded`**
+
+实例 A（无变量）跑一次**多目标**作业（本地 `local-s4` + 回环 `loopback-webdav` + 明文 `insecure-bridge`，https 目标先 `enabled=false`）：
+
+```
+POST /api/v1/admin/backups/jobs {}  → HTTP=201
+status = "degraded"
+targets = [
+  {"name":"insecure-bridge","status":"skipped","error":"拒绝使用明文 http 备份目标：172.17.0.3 不是回环地址，…当前缺少 环境变量 ALLOW_INSECURE_BACKUP_HTTP=true。…"},
+  {"name":"loopback-webdav","status":"verified","error":null},
+  {"name":"local-s4","status":"verified","error":null}]
+
+backup_jobs:          status=degraded  error_code=BACKUP_TARGET_INSECURE_SKIPPED
+                      error_message=已跳过 1 个明文 http 目标（未完成双重确认）：insecure-bridge（拒绝使用明文 http 备份目标：…）
+backup_job_targets:   verified / verified / skipped(INSECURE_HTTP_NOT_CONFIRMED)
+```
+
+单目标作业要特别注意：那个明文目标是唯一目标时，跳过会让 `decideJobStatus` 判成 `failed`（没有任何目标成功），
+所以「作业状态」只有在**有别的合规目标成功**时才是 `degraded`。两种结果都是「不发送」，区别只在措辞。
+
+**1.5.4 反向确认：放行后确实能传**
+
+同一目标在实例 B（双条件齐）上单独跑：`status=succeeded`，target `verified`，产物 298 KB（对端是本机容器，
+首次 403 是容器缺 `upload` 目录，预建目录后通过）。即：闸门不是把功能焊死，而是要求显式确认。
+
+**1.5.5 回环与 https 不受影响（各一条）**
+
+```
+实例 A（无变量）POST 回环 http://127.0.0.1:19081 tls_verify=false → HTTP=201, insecureHttp.plaintext=false
+实例 A（无变量）POST https://dav.example.com                     → HTTP=201, tlsVerify=true, plaintext=false
+实例 A 跑回环目标                                               → succeeded / verified
+实例 A 跑 local 目标                                            → succeeded / verified
+实例 A PATCH https 目标（改名/启停）                             → HTTP=200
+```
+
+**1.5.6 概览标志（页面徽章的数据来源）**
+
+```
+GET /api/v1/admin/backups/overview
+实例 A（无变量）： "destinations":{"total":4,"enabled":4,"plaintext":1,"plaintextAccepted":0,"plaintextBlocked":1}
+实例 B（有变量）： "destinations":{"total":4,"enabled":4,"plaintext":1,"plaintextAccepted":1,"plaintextBlocked":0}
+```
+
+`plaintext` = 明文目标数，`plaintextAccepted` = 已双重确认放行数，`plaintextBlocked` = 会被执行期跳过数。
+页面（`/app/settings/backups`）在目标名后渲染红色「明文传输」徽章，悬停说明风险与补救；「目标健康」卡
+追加「（N 个未确认，执行期跳过）」。徽章判定用同一份 `insecureHttp` 字段，不含第二套逻辑。
+
+**1.5.7 现网只读核查（回答「上线后哪些目标会被跳过」）**
+
+```
+docker exec licensing-pg psql -U licensing -d licensing -c \
+  "SELECT name, provider_type, endpoint_url, tls_verify, enabled FROM backup_storage_destinations ORDER BY priority;"
+
+local-primary        | local  | (null)                     | t     | t
+offsite-s3           | s3     | http://127.0.0.1:19000     | f     | t   ← 回环，豁免
+offsite-sftp         | sftp   | sftp://127.0.0.1:19022     | t     | t
+offsite-webdav       | webdav | http://127.0.0.1:19080     | f     | t   ← 回环，豁免
+offsite-webdav-remote| webdav | http://96.62.250.65:5244/dav | f   | t   ← 唯一非回环 http
+```
+
+结论：现网 5 个目标里只有 `offsite-webdav-remote` 属「非回环 + http + `tls_verify=false`」。若 `production.env`
+不设 `ALLOW_INSECURE_BACKUP_HTTP=true`，上线后该目标会被**执行期跳过**、作业降级为 `degraded`（其余 4 个照常）；
+要保留它就得同时补上环境变量并接受审计留痕，正解是把它改成 https 或走内网隧道。上线检查 SQL 已写进
+`docs/v15-runbook.md` §4.1.1。
+
+## 2. 单元测试（252 个 / 21 个文件；阶段 3 前为 335/26：108 条随安装器移入 `packages/universal-installer/tests`，阶段 4 新增 25 条）
 
 只测纯函数与领域规则，不碰数据库、不 mock 业务分支。
 
-逐文件用例数（`npx vitest run --reporter=json` 统计 `assertionResults.length`）。下表是阶段 3 **之前**的全量快照（合计 335），
-其中 6 个 `installer-*` 文件共 108 条已在阶段 3 移到包内，宿主现为 227；两处都用同一份用例，没有删减：
+逐文件用例数（`npx vitest run --reporter=json` 统计 `assertionResults.length`）。下表是阶段 3 **之前**的全量快照（合计 335）。
+其中 6 个 `installer-*` 文件共 108 条已在阶段 3 移到包内（`npm run test:installer` 跑）；
+阶段 4 新增 `tests/unit/backup-insecure-http.test.ts` 25 条。宿主当前 = 335 − 108 + 25 = **252 条 / 21 个文件**，没有删减：
 
 | 文件 | 用例数 | 文件 | 用例数 |
 | --- | --- | --- | --- |

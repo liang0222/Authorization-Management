@@ -8,7 +8,7 @@
 
 后台已经可以完整走通「建产品 → 定功能 → 定套餐 → 签授权 → 客户端激活 → 心跳/读权限 →
 续费/暂停/解绑/撤销 → 审计留痕」全链路，并新增「备份与灾备」（多目标备份 → 加密 →
-上传 → 回读校验 → 隔离恢复演练）。类型检查 0 错、构建 101/101 静态页、227 单元（另有安装器 108 条在包内）、
+上传 → 回读校验 → 隔离恢复演练）。类型检查 0 错、构建 101/101 静态页、252 单元（另有安装器 108 条在包内）、
 12 集成、16 端到端（实测 14 过 2 失败，见 2.1 表末两行与第 2.3 节）。
 另有**一条已知缺陷**必须先知道：2 条备份 E2E 在纯净种子下必失败（见 2.2 表）。
 （原先「干净安装后 build 必失败」那条已在阶段 0.5 修复：`turbopack.resolveAlias` 把 `cpu-features`
@@ -29,7 +29,7 @@
 | --- | --- | --- |
 | `npx tsc --noEmit` | 0 错误 | 每批改动后执行 |
 | `npm run build` | 101/101 静态页 | 生产构建实测（`Generating static pages (101/101)`；路由表 127 条）。**干净副本 `npm ci` 后同样通过**（阶段 0.5 修复后实测，见 2.2 表末行）。静态页与路由数比阶段 2 少 5，是阶段 3 把 `/install` 与 `/api/install/*` 移出本仓库，不是功能丢失 |
-| 单元测试 | 227 passed (20 files) | `npx vitest run`（含备份加解密 / 状态判定 / cron 校验 / 启动闸门四组合 / seed 护栏与 `check:prod-env` 判定 / 演示账号检测）。阶段 3 把 6 个安装器测试文件（108 条）移到 `packages/universal-installer/tests/`，用 `npm run test:installer` 跑，仍全绿 |
+| 单元测试 | 252 passed (21 files) | `npx vitest run`（含备份加解密 / 状态判定 / cron 校验 / 启动闸门四组合 / seed 护栏与 `check:prod-env` 判定 / 演示账号检测 / 备份明文通道护栏判定（阶段 4 新增 25 条））。阶段 3 把 6 个安装器测试文件（108 条）移到 `packages/universal-installer/tests/`，用 `npm run test:installer` 跑，仍全绿 |
 | 集成测试 | 12 passed | `npx vitest run -c vitest.integration.config.ts`，真实 HTTP + PostgreSQL；**必须干净种子**，脏库会让「并发激活」那条偶发 422 |
 | 端到端 | 16 tests in 7 files，实测 **14 passed / 2 failed** | `npx playwright test`（桌面 + Pixel 7，含只读角色 1 条）。失败的两条是 `tests/e2e/05-backups.spec.ts` 的「被策略引用的目标不允许直接删除」与「立即备份 → 完整性校验 → 隔离恢复演练」——它们假设库里已有备份目标/策略，而 `prisma/seed.ts` 不建备份数据，纯净种子下必然失败（详见第 2.3 节） |
 | 备份全链路 | 16 项冒烟全 PASS | 建目标 → 连接测试 → 建策略 → 立即备份 201 `succeeded` → 回读校验 → 隔离恢复演练 `passed` RTO 3s → 概览统计 → 删除被引用目标 409 |
@@ -52,6 +52,7 @@
 
 | 项 | 原因 | 要做的话 |
 | --- | --- | --- |
+| **现网 `offsite-webdav-remote` 是非回环 http**（`http://96.62.250.65:5244/dav`，`tls_verify=false`） | 阶段 4 之前 `tls_verify=false` 就等于同意明文；阶段 4 上线后若 `production.env` 不设 `ALLOW_INSECURE_BACKUP_HTTP=true`，它会被执行期跳过、作业 `degraded`（其余 4 个目标照常） | ①正解：改成 https 或走内网隧道；②过渡：加 `ALLOW_INSECURE_BACKUP_HTTP=true` 并接受审计留痕。检查 SQL 见 `docs/v15-runbook.md` §4.1.1 |
 | **生产库 3 个用户全是演示账号**（`owner@` / `ops@` / `audit@xinglan.dev`，密码 `License#2026`） | 现网从未换过账号；`prisma/seed.ts` 建的就是这三个。阶段 2 的启动检测会把它当拦截项 | **部署阶段 2 前**任选：①改名 + 改密（不动外键，最小改动）；②先建真实管理员再删旧的（删除要按 7 个外键顺序解绑：`organization_memberships`、`admin_sessions`、`licenses.created_by`、`license_renewals.created_by`、`backup_jobs.created_by`、`backup_restore_tests.created_by`、`password_reset_tokens`）。不改就部署 → 重启即被闸门拦下 |
 | `/app/devices/[id]` 设备详情页 | 不在 NAV 里，列表已能查到设备且可释放/封禁 | 后端 `GET /admin/devices/[id]` 已就绪（档案 + 激活历史 + 事件），照 `customers/[id]` 的写法加页面即可 |
 | `/app/settings/roles` 角色管理页 | 成员页已消费 `GET /admin/roles` 的角色下拉 | 后端 `GET/POST /admin/roles` 已就绪，做一个「角色 + 权限勾选」列表页 |
@@ -71,7 +72,7 @@
 | 页面 48 | `find src/app -name 'page.tsx' \| wc -l` | 后台 26 + 开发者文档 17 + 认证 3 + 根 1 + `/openapi` 1（`/install` 已随阶段 3 移出） |
 | API 路由 70 | `find src/app/api -name 'route.ts' \| wc -l` | `api/v1/admin` 54 + `api/v1/auth` 5 + `api/v1` 公开 11（`api/install` 4 个已移出） |
 | route handler 78 | `find src/app -name 'route.ts' \| wc -l` | 70 + `developers/` 5 + `/health/live`·`/health/ready`·`/metrics` 3 |
-| 单元 227 / 20 文件 | `npx vitest run` | `Test Files 20 passed (20) / Tests 227 passed (227)`；另有 `npm run test:installer` → `Test Files 6 passed (6) / Tests 108 passed (108)` |
+| 单元 252 / 21 文件 | `npx vitest run` | `Test Files 21 passed (21) / Tests 252 passed (252)`；另有 `npm run test:installer` → `Test Files 6 passed (6) / Tests 108 passed (108)` |
 | 集成 12 | `npx vitest run -c vitest.integration.config.ts` | `Tests 12 passed (12)`（先 `npm run db:seed`） |
 | 端到端 16 / 7 文件 | `npx playwright test --list` | `Total: 16 tests in 7 files`；实测 14 passed / 2 failed |
 | 静态页 101 | `npm run build` | `✓ Generating static pages using 3 workers (101/101)` |

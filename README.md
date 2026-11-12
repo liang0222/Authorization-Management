@@ -91,7 +91,7 @@ npm run dev            # http://localhost:3000
 
 ```bash
 npm run typecheck                              # tsc --noEmit
-npm run test                                   # 227 个单元测试（20 个文件）
+npm run test                                   # 252 个单元测试（21 个文件）
 npm run test:installer                         # 108 个安装器单元测试（包内自跑，6 个文件）
 npx vitest run -c vitest.integration.config.ts # 12 个集成测试（需 dev/prod 服务 + 种子数据）
 npm run e2e                                    # 16 个端到端（自带 next start -p 3001）
@@ -269,7 +269,7 @@ packages/universal-installer/ 通用安装器（阶段 3 拆出：自带 README/
                               不反向 import 授权系统业务模块，只经 host/ 四个耦合文件）
 sdk-examples/                 六语言可运行示例 + verify.mjs（Preview，非已发布 SDK）
 tests/
-├─ unit/                      227 个纯函数与契约测试（20 个文件；安装器另有 108 条在
+├─ unit/                      252 个纯函数与契约测试（21 个文件；安装器另有 108 条在
 │                             packages/universal-installer/tests，用 `npm run test:installer` 跑）
 ├─ integration/               12 个真实 HTTP + DB 测试
 └─ e2e/                       16 个 Playwright 用例（7 个文件，含 setup）
@@ -360,3 +360,9 @@ docs/                         交付文档（见下）
   授权系统的构建产物里没有 `/install` 与 `/api/install/*`。
   `installer_records` 表从 `schema.prisma` 移除，但**表和数据继续留在库里**——
   迁移 `20261113000000_installer_records_handoff` 是空迁移（纯注释、零 SQL），不产生任何 DROP。
+- **备份明文通道要双重确认（阶段 4）**：生产环境下 `http://` 且**非回环**的备份目标，除了目标上显式
+  `tls_verify=false`，还必须设 `ALLOW_INSECURE_BACKUP_HTTP=true` 才能保存与执行；缺任一项，保存返回
+  400 `INSECURE_HTTP_NOT_CONFIRMED`，执行期直接跳过该目标并把作业降级为 `degraded`（不会静默明文发送）。
+  回环（`localhost` / `127.0.0.0/8` / `::1`）与 `https` / `sftp` / `local` 不受影响，非生产环境行为不变。
+  放行过的目标写 `audit_logs.action = backup.target_insecure_accepted`，备份设置页显示红色「明文传输」徽章。
+  上线前用 `docs/v15-runbook.md` §4.1.1 的 SQL 确认现网没有漏网的明文目标。

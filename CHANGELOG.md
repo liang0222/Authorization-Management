@@ -10,6 +10,38 @@ Release Note、commit、迁移 ID 与回滚方式。
 
 ## [Unreleased]
 
+### 安全 · 备份明文通道需要双重确认（阶段 4）
+
+**问题**：`factory.ts` 的判定是 `allowInsecureHttp = DEPLOYMENT_ENV !== "production" || row.tls_verify === false`。
+`tls_verify` 的语义是「跳过证书校验」，却被当成了「同意明文」的授权书——生产环境只要把备份目标的
+`tls_verify` 设成 `false`，非回环的 `http://` WebDAV 就会放行，Basic Auth 口令与备份内容全程明文过网。
+生产库里 `offsite-webdav-remote`（`http://96.62.250.65:5244/dav`，`tls_verify=false`）正是这种状态。
+
+**现在**：判定收到 `src/lib/services/backup/insecure-http.ts`（`evaluateInsecureHttpTarget`），
+保存接口、执行器与页面 DTO 共用同一个函数：
+
+- 生产 + `http://` + 非回环：必须同时满足「目标上显式 `tls_verify=false`」与「环境变量
+  `ALLOW_INSECURE_BACKUP_HTTP=true`」，缺任一 → 创建/更新返回 **400 `INSECURE_HTTP_NOT_CONFIRMED`**
+  （`details.requires` 列出缺哪两项），执行期则**跳过该目标**并把作业降级为 `degraded`
+  （`error_code=BACKUP_TARGET_INSECURE_SKIPPED`），绝不静默明文发送。
+- 回环（`localhost` / `127.0.0.0/8` / `::1` / `0.0.0.0`）与 `https` / `sftp` / `local` 不受限；非生产环境行为不变。
+- 变量只认精确 `true`，默认不设置；代码里没有任何绕过分支。
+
+**审计与可见性**：每次保存「不合规但被双重确认放行」的目标写一条
+`audit_logs.action = backup.target_insecure_accepted`（`after_data` 含 `host`、`provider_type`、`tls_verify`、
+`confirmed_by`，`actor_id` 为操作者）；`/api/v1/admin/backups/overview` 的 `destinations` 增加
+`plaintext` / `plaintextAccepted` / `plaintextBlocked` 三个计数，目标 DTO 增加 `insecureHttp` 明细，
+备份设置页对这类目标显示红色「明文传输」徽章。
+
+**部署影响（需要人工确认一次）**：现网 5 个目标中只有 `offsite-webdav-remote` 属「非回环 + http」。
+不带 `ALLOW_INSECURE_BACKUP_HTTP=true` 时，上线后它会从「每次都传」变成「每次跳过 + 作业 degraded」
+（其余 4 个目标照常，本地备份不受影响）。两条路：①正解——把它改成 https 或内网隧道；
+②过渡——在 `production.env` 加 `ALLOW_INSECURE_BACKUP_HTTP=true` 并接受审计留痕。
+上线检查 SQL 见 `docs/v15-runbook.md` §4.1.1。
+
+**回滚**：本阶段只改判定与展示，不动加密、格式、调度、保留策略，数据库无结构变更；
+回滚代码即可，`ALLOW_INSECURE_BACKUP_HTTP` 留着也无副作用（只有代码读它）。
+
 ### 架构 · 拆分 Universal Installer：运行时解耦 + 代码与数据隔离（阶段 3）
 
 安装器原本长在授权系统里，宿主不光打包它，还要**读它的锁文件**才敢起后台任务——部署形态被一个

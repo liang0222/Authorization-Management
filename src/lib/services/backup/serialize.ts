@@ -1,4 +1,6 @@
 import { describeCron, nextRunAfter } from "@/lib/domain/cron";
+import { evaluateInsecureHttpTarget } from "./insecure-http";
+import { config } from "@/lib/config";
 import type {
   backup_job_targets,
   backup_jobs,
@@ -41,6 +43,13 @@ export interface DestinationFields {
 }
 
 export function destinationDto(row: DestinationFields, credentialConfigured: boolean) {
+  // 明文 http 的现状（阶段 4）：前端据此显示红色「明文传输」徽章。
+  // 判定口径与服务端护栏完全一致（同一个函数），避免「页面说没事、执行时被跳过」。
+  const insecure = evaluateInsecureHttpTarget({
+    deploymentEnv: config.deploymentEnv,
+    endpointUrl: row.endpoint_url,
+    tlsVerify: row.tls_verify,
+  });
   return {
     id: row.id,
     name: row.name,
@@ -62,6 +71,19 @@ export function destinationDto(row: DestinationFields, credentialConfigured: boo
     lastTestStatus: row.last_test_status,
     lastTestErrorCode: row.last_test_error_code,
     lastTestError: row.last_test_error,
+    insecureHttp: {
+      /** http 且非回环：这条链路真的会把 Basic Auth 口令明文发到网卡外。 */
+      plaintext: insecure.plaintext,
+      /** 目标上显式 tls_verify=false。 */
+      targetConfirmed: insecure.targetConfirmed,
+      /** 环境变量 ALLOW_INSECURE_BACKUP_HTTP=true。 */
+      envConfirmed: insecure.envConfirmed,
+      /** 双重确认齐了、生产环境允许使用。 */
+      accepted: insecure.plaintext && insecure.targetConfirmed && insecure.envConfirmed,
+      /** 当前条件下不可用（创建/更新会被 400，执行期会被跳过）。 */
+      blocked: !insecure.allowed,
+      reason: insecure.reason,
+    },
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

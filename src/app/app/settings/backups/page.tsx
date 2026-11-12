@@ -93,6 +93,15 @@ interface Destination {
   lastTestStatus: "untested" | "passed" | "failed";
   lastTestErrorCode: string | null;
   lastTestError: string | null;
+  /** 明文 http 现状（阶段 4）。判定口径与服务端护栏同一个函数。 */
+  insecureHttp?: {
+    plaintext: boolean;
+    targetConfirmed: boolean;
+    envConfirmed: boolean;
+    accepted: boolean;
+    blocked: boolean;
+    reason: string | null;
+  };
 }
 
 interface PolicyTarget {
@@ -176,7 +185,16 @@ interface Overview {
   lastFailure: { id: string; backupId: string; errorCode: string | null; errorMessage: string | null } | null;
   lastVerifiedAt: string | null;
   lastRestoreTest: { id: string; status: string; finishedAt: string | null; rtoSeconds: number | null } | null;
-  destinations: { total: number; enabled: number; healthy: number; failing: number; untested: number };
+  destinations: {
+    total: number;
+    enabled: number;
+    healthy: number;
+    failing: number;
+    untested: number;
+    plaintext: number;
+    plaintextAccepted: number;
+    plaintextBlocked: number;
+  };
   jobs30d: { total: number; succeeded: number; failed: number; partial: number; degraded: number; successRate: number };
   totalSizeBytes: number;
   retention: unknown;
@@ -435,6 +453,26 @@ export default function BackupsPage() {
                     <span className="rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">必需</span>
                   </TooltipTrigger>
                   <TooltipContent>all_required 模式下，这个目标失败会让整次备份失败</TooltipContent>
+                </Tooltip>
+              ) : null}
+              {row.insecureHttp?.plaintext ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="shrink-0 rounded bg-destructive/10 px-1 py-0.5 text-[10px] font-medium text-destructive">
+                      明文传输
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-xs">
+                    <div className="space-y-1">
+                      <div>该目标是 http 且不是回环地址，Basic Auth 凭据会明文过网（备份体本身是 AES 信封）。</div>
+                      <div>
+                        {row.insecureHttp.accepted
+                          ? "已双重确认放行：tls_verify=false + ALLOW_INSECURE_BACKUP_HTTP=true。"
+                          : "未完成双重确认，备份执行时会被跳过（作业降级）。"}
+                      </div>
+                      <div>补救：给端点配 https 反代，把地址改成 https:// 后去掉该环境变量。</div>
+                    </div>
+                  </TooltipContent>
                 </Tooltip>
               ) : null}
             </div>
@@ -989,6 +1027,17 @@ export default function BackupsPage() {
               <span>
                 未测 <span className="font-medium text-foreground">{overviewData?.destinations.untested ?? 0}</span>
               </span>
+              {(overviewData?.destinations.plaintext ?? 0) > 0 ? (
+                <span>
+                  明文传输{" "}
+                  <span className="font-medium text-destructive">{overviewData?.destinations.plaintext ?? 0}</span>
+                  {(overviewData?.destinations.plaintextBlocked ?? 0) > 0 ? (
+                    <span className="text-destructive">
+                      （{overviewData?.destinations.plaintextBlocked} 个未确认，执行期跳过）
+                    </span>
+                  ) : null}
+                </span>
+              ) : null}
             </div>
             <div className="mt-3 border-t border-border/60 pt-2 text-[11px] text-muted-foreground">
               WAL 归档：
