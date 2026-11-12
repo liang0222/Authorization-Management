@@ -77,6 +77,40 @@ const patchSchema = z
     { message: "请提供要更新的字段" },
   );
 
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  return withAdmin(req, "webhook:read", async ({ session, requestId }) => {
+    const { id } = await ctx.params;
+    // 与其它资源详情一致：跨租户与不存在一律 404，不返回 403 暴露存在性。
+    const endpoint = await prisma.webhook_endpoints.findFirst({
+      where: { id, organization_id: session.organization.id },
+      select: {
+        id: true,
+        product_id: true,
+        url: true,
+        event_types: true,
+        status: true,
+        created_at: true,
+        products: { select: { id: true, name: true, code: true } },
+      },
+    });
+    if (!endpoint) throw new ApiError(404, "RESOURCE_NOT_FOUND", "Webhook 端点不存在");
+    return okResponse(
+      {
+        webhook: {
+          id: endpoint.id,
+          productId: endpoint.product_id,
+          url: endpoint.url,
+          eventTypes: endpoint.event_types,
+          status: endpoint.status,
+          createdAt: endpoint.created_at,
+          product: endpoint.products,
+        },
+      },
+      requestId,
+    );
+  });
+}
+
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   return withAdmin(req, "webhook:write", async ({ session, requestId, ip, userAgent }) => {
     const { id } = await ctx.params;

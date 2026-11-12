@@ -1,4 +1,5 @@
 import { BackupAdapterError, type FetchResult, type PutResult, type StorageAdapter } from "../types";
+import { assertSafeBackupPath, normalizeRelativePrefix } from "../paths";
 
 /**
  * WebDAV 适配器（规格 16.11.4）。
@@ -37,8 +38,12 @@ const TRANSFER_TIMEOUT_MS = 300_000;
 
 export class WebDavAdapter implements StorageAdapter {
   readonly kind = "webdav";
+  private readonly prefix: string;
 
   constructor(private readonly options: WebDavOptions) {
+    // 前缀与每次请求的相对路径都在这里过一遍：WebDAV 的 URL 解析会把 `..` 归一化，
+    // 入库校验之外再做一次，防止历史数据/其他调用入口绕过。
+    this.prefix = normalizeRelativePrefix(options.prefix, "WebDAV 根路径");
     if (!this.options.endpoint.startsWith("https://")) {
       // 明文 http 的放行规则（规格 16.11.4 默认要求 https）：
       // 必须由操作者在目标上显式设 tlsVerify=false，工厂据此传 allowInsecureHttp=true，
@@ -62,9 +67,8 @@ export class WebDavAdapter implements StorageAdapter {
 
   private urlFor(remotePath: string): string {
     const base = this.options.endpoint.replace(/\/$/, "");
-    const prefix = this.options.prefix.replace(/^\/|\/$/g, "");
-    const path = remotePath.replace(/^\/+/, "");
-    const segments = [prefix, path].filter(Boolean).flatMap((item) => item.split("/"));
+    const path = assertSafeBackupPath(remotePath, "WebDAV 相对路径").replace(/^\/+/, "");
+    const segments = [this.prefix, path].filter(Boolean).flatMap((item) => item.split("/"));
     return `${base}/${segments.map((segment) => encodeURIComponent(segment)).join("/")}`;
   }
 

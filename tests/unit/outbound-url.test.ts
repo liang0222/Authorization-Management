@@ -81,6 +81,14 @@ describe("回调地址静态校验", () => {
     expect(checkOutboundUrl("https://127.0.0.1:8443/hook", PROD)).toBe("blocked_address");
   });
 
+  it("IPv6 回环字面量即使在开发环境也拦", () => {
+    expect(checkOutboundUrl("http://[::1]:4011/hook", DEV)).toBe("blocked_address");
+    expect(checkOutboundUrl("https://[::1]/hook", DEV)).toBe("blocked_address");
+    // localhost / IPv4 回环仍按开发策略放行，本地夹具不受影响。
+    expect(checkOutboundUrl("http://localhost:4011/hook", DEV)).toBeNull();
+    expect(checkOutboundUrl("https://127.0.0.1:8443/hook", DEV)).toBeNull();
+  });
+
   it("http 只在开发环境对回环放行", () => {
     expect(checkOutboundUrl("http://localhost:4011/hook", DEV)).toBeNull();
     expect(checkOutboundUrl("http://127.0.0.1:4011/hook", DEV)).toBeNull();

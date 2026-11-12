@@ -177,21 +177,30 @@ export function checkOutboundUrl(raw: string, policy: OutboundUrlPolicy): Outbou
 
   // 回环地址单独处理：开发策略下放行（含 http），生产一律拒绝。
   // 放在 IP 字面量与单标签主机名判断之前，因为 localhost 两者都不是。
+  //
+  // 例外：IPv6 回环字面量 `[::1]` 即使在开发环境也不放行。本地联调只需要
+  // `localhost` / `127.0.0.1`；把字面量 `::1` 也放开，会让「回环放行」这条策略
+  // 多出一个不必要的外部可指定地址面（同时也避免测试把 `[::1]` 当成本机夹具）。
   if (loopback || isLoopbackAddress(hostname)) {
+    if (isIP(hostname) === 6 && isLoopbackAddress(hostname)) return "blocked_address";
     if (isHttp && !policy.allowHttpLoopback) return "unsupported_protocol";
     return policy.allowHttpLoopback ? null : "blocked_address";
   }
-  if (isHttp) return "unsupported_protocol";
 
   const literalVersion = isIP(hostname);
   if (literalVersion !== 0) {
     // 非回环的 IP 字面量：私网、链路本地、元数据段一律拦。
+    // 地址判断放在协议判断之前：`http://10.0.0.5` 报「内网地址」比报
+    // 「必须是 https」更准确，也避免调用方误以为是证书/协议配置问题。
     if (isBlockedAddress(hostname)) return "blocked_address";
+    if (!isHttps) return "unsupported_protocol";
     return null;
   }
 
-  // 单标签主机名只能靠内网 DNS 解析，公网回调不该出现
+  // 单标签主机名只能靠内网 DNS 解析，公网回调不该出现。
+  // 同样放在协议判断之前，保证 `http://metadata` 得到的是「内网」而不是协议提示。
   if (!hostname.includes(".")) return "blocked_address";
+  if (isHttp) return "unsupported_protocol";
 
   return null;
 }

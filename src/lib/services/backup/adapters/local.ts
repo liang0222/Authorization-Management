@@ -1,6 +1,7 @@
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { FetchResult, PutResult, StorageAdapter } from "../types";
+import { assertSafeBackupPath } from "../paths";
 
 /**
  * 本地暂存盘（规格 16.11.1 P0，但明确「仅暂存、不计异地」）。
@@ -17,6 +18,8 @@ export class LocalAdapter implements StorageAdapter {
   ) {}
 
   private pathFor(remotePath: string): string {
+    assertSafeBackupPath(this.root, "本地备份根目录");
+    assertSafeBackupPath(remotePath, "本地备份相对路径");
     const root = resolve(this.root);
     const target = resolve(join(root, remotePath));
     // 防目录穿越：remotePath 来自数据库里的作业元数据，仍然不该无条件信任。

@@ -1,5 +1,6 @@
 import { createHash, createHmac } from "node:crypto";
 import type { FetchResult, PutResult, StorageAdapter } from "../types";
+import { assertSafeBackupPath } from "../paths";
 import { BackupAdapterError } from "../types";
 
 /**
@@ -35,6 +36,9 @@ function hmac(key: Buffer | string, data: string): Buffer {
 
 function encodeKeyPath(key: string): string {
   // S3 的 URI 编码规则：保留 `/`，其余按 RFC 3986 且不编码 `!'()*` 之外的子集。
+  // 先拒绝 `..`/`.` 段：对象键本身没有目录语义，但同一路径也会被其他 provider 复用，
+  // 不能让一条带穿越段的对象键在适配器边界静默通过。
+  assertSafeBackupPath(key, "S3 对象路径");
   return key
     .split("/")
     .map((segment) =>

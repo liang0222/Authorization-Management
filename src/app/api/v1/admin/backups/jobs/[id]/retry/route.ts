@@ -18,6 +18,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const { id } = await ctx.params;
     const body = await readJson(req, schema).catch(() => ({ targetId: null }));
 
+    // 先按组织确认作业存在：跨租户与不存在的 id 一律 404，避免用
+    // 「400 没有可重传目标」这种差异泄露某个作业 id 是否真实存在。
+    const job = await prisma.backup_jobs.findFirst({
+      where: { id, organization_id: session.organization.id },
+      select: { id: true },
+    });
+    if (!job) throw new ApiError(404, "NOT_FOUND", "备份作业不存在");
+
     const failed = await prisma.backup_job_targets.findMany({
       where: {
         job_id: id,

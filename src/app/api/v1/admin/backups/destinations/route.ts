@@ -7,6 +7,7 @@ import { writeAudit } from "@/lib/domain/audit";
 import { config } from "@/lib/config";
 import { createCredential } from "@/lib/services/backup/credentials";
 import { destinationCreateSchema, requireFieldsForProvider } from "@/lib/services/backup/schemas";
+import { assertBackupEndpointAllowed } from "@/lib/services/backup/target-guard";
 import { destinationRowDto } from "@/lib/services/backup/serialize";
 import { evaluateInsecureHttpTarget } from "@/lib/services/backup/insecure-http";
 
@@ -70,6 +71,12 @@ export async function POST(req: NextRequest) {
       credentialKind: body.credential?.kind ?? null,
     });
     if (missing) throw new ApiError(400, "INVALID_REQUEST", missing, { field: "credential" });
+
+    // SSRF：端点地址在入库前就校验，避免「配置能存、备份时才替调用方访问内网」。
+    assertBackupEndpointAllowed(
+      { providerType: body.providerType, endpointUrl: body.endpointUrl },
+      { allowHttpLoopback: config.deploymentEnv !== "production" },
+    );
 
     // 明文 http 的双重确认（阶段 4）：生产环境保存非回环 http 目标时，
     // 目标上的 tls_verify=false 与环境变量 ALLOW_INSECURE_BACKUP_HTTP=true 必须同时具备。

@@ -7,6 +7,7 @@ import { writeAudit } from "@/lib/domain/audit";
 import { createCredential, revokeCredential } from "@/lib/services/backup/credentials";
 import { destinationPatchSchema, requireFieldsForProvider } from "@/lib/services/backup/schemas";
 import { destinationRowDto } from "@/lib/services/backup/serialize";
+import { assertBackupEndpointAllowed } from "@/lib/services/backup/target-guard";
 import { evaluateInsecureHttpTarget } from "@/lib/services/backup/insecure-http";
 import { config } from "@/lib/config";
 
@@ -66,6 +67,14 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       credentialKind: body.credential?.kind ?? null,
     });
     if (missing) throw new ApiError(400, "INVALID_REQUEST", missing, { field: "credential" });
+
+    // SSRF：只改连接参数时校验「改完之后」的端点；只改名称/优先级不重判历史地址。
+    if (body.endpointUrl !== undefined || body.providerType !== undefined) {
+      assertBackupEndpointAllowed(
+        { providerType, endpointUrl },
+        { allowHttpLoopback: config.deploymentEnv !== "production" },
+      );
+    }
 
     // 明文 http 的双重确认（阶段 4）：用「改完之后的值」判定，
     // 否则把 https 目标改成 http、或把 tlsVerify 从 true 改成 false 都会绕过创建时的检查。

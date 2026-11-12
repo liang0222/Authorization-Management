@@ -6,6 +6,8 @@ import { WebDavAdapter } from "./adapters/webdav";
 import { SftpAdapter } from "./adapters/sftp";
 import { BackupAdapterError, type StorageAdapter } from "./types";
 import { evaluateInsecureHttpTarget } from "./insecure-http";
+import { normalizeRelativePrefix } from "./paths";
+import { assertBackupEndpointAllowed } from "./target-guard";
 import { config } from "@/lib/config";
 
 /** 数据库行到适配器的映射（只做映射，不做业务判断）。 */
@@ -65,12 +67,19 @@ export function parseCredential(ciphertext: Uint8Array): CredentialPayload {
  * 本地与 S3 适配器根本不读 `prefix`，所以只有 SFTP/WebDAV 暴露了这个双重拼接。
  */
 function joinRemotePrefix(rootPath: string | null): string {
-  return (rootPath ?? "").replace(/^\/+|\/+$/g, "");
+  // 统一在这里做 `..`/编码分隔符校验并裁掉首尾 `/`；绝对前缀会落到远端根下，不会逃出去。
+  return normalizeRelativePrefix(rootPath, "root_path");
 }
 
 export async function createAdapter(row: AdapterRow, organizationId: string): Promise<StorageAdapter> {
-  const remotePrefixOnly = (row.remote_prefix ?? "").replace(/^\/+|\/+$/g, "") || `backups/${config.deploymentEnv}`;
+  const remotePrefixOnly = normalizeRelativePrefix(row.remote_prefix, "remote_prefix") || `backups/${config.deploymentEnv}`;
   const prefix = joinRemotePrefix(row.root_path);
+
+  // 兜底：即使有历史配置绕过了 API 校验（或从别的入口直接建适配器），也不替调用方访问内网。
+  assertBackupEndpointAllowed(
+    { providerType: row.provider_type, endpointUrl: row.endpoint_url },
+    { allowHttpLoopback: config.deploymentEnv !== "production" },
+  );
 
   // 明文 http 的双重确认（阶段 4）：生产环境下 http + 非回环，必须同时满足
   // `tls_verify=false` 与 `ALLOW_INSECURE_BACKUP_HTTP=true` 才允许建适配器。

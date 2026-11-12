@@ -1,4 +1,5 @@
 import { Client, type ConnectConfig } from "ssh2";
+import { assertSafeBackupPath, normalizeRelativePrefix } from "../paths";
 import { BackupAdapterError, type FetchResult, type PutResult, type StorageAdapter } from "../types";
 
 /**
@@ -23,8 +24,11 @@ export interface SftpOptions {
 
 export class SftpAdapter implements StorageAdapter {
   readonly kind = "sftp";
+  private readonly prefix: string;
 
-  constructor(private readonly options: SftpOptions) {}
+  constructor(private readonly options: SftpOptions) {
+    this.prefix = normalizeRelativePrefix(options.prefix, "SFTP 根路径");
+  }
 
   private connect(): Promise<Client> {
     if (!this.options.hostKey) {
@@ -64,8 +68,9 @@ export class SftpAdapter implements StorageAdapter {
   }
 
   private remotePath(remotePath: string): string {
-    const prefix = this.options.prefix.replace(/^\/|\/$/g, "");
-    return `/${[prefix, remotePath].filter(Boolean).join("/")}`;
+    // 绝对路径由这里统一补根前缀；`..` 段必须拒绝，否则 SFTP 的路径解析会逃出根目录。
+    const relative = assertSafeBackupPath(remotePath, "SFTP 相对路径").replace(/^\/+/, "");
+    return `/${[this.prefix, relative].filter(Boolean).join("/")}`;
   }
 
   async test(): Promise<Array<{ step: string; ok: boolean; detail?: string }>> {

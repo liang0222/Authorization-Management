@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { BackupPathError, assertSafeBackupPath } from "./paths";
+
 /**
  * 备份目标/策略的入参校验。
  *
@@ -35,6 +37,24 @@ export type CredentialPayload = z.infer<typeof credentialSchema>;
 export const P0_PROVIDERS = ["local", "s3", "webdav", "sftp"] as const;
 export type P0Provider = (typeof P0_PROVIDERS)[number];
 
+/** 路径字段：长度之外还要拒绝 `..`、反斜杠、编码后的分隔符（见 paths.ts）。 */
+function safePathField(label: string, max: number) {
+  return z.string().max(max).superRefine((value, ctx) => {
+    if (!value.trim()) return;
+    try {
+      assertSafeBackupPath(value, label);
+    } catch (error) {
+      const message = error instanceof BackupPathError ? error.message : `${label}不合法`;
+      ctx.addIssue({ code: "custom", message });
+    }
+  });
+}
+
+/** 相对前缀：拒绝穿越，并把首尾 `/` 归一化掉（绝对写法落回目标根内，而不是被当成新根）。 */
+function relativePrefixField(label: string, max: number) {
+  return safePathField(label, max).transform((value) => value.trim().replace(/^\/+|\/+$/g, ""));
+}
+
 export const destinationCreateSchema = z.object({
   name: z.string().min(1).max(120),
   providerType: z.enum(P0_PROVIDERS),
@@ -42,8 +62,8 @@ export const destinationCreateSchema = z.object({
   endpointUrl: z.string().max(500).nullish(),
   region: z.string().max(64).nullish(),
   bucket: z.string().max(160).nullish(),
-  rootPath: z.string().max(500).nullish(),
-  remotePrefix: z.string().max(300).nullish(),
+  rootPath: safePathField("root_path", 500).nullish(),
+  remotePrefix: relativePrefixField("remote_prefix", 300).nullish(),
   authMethod: z.enum(["access_key", "username_password", "ssh_key", "none"]),
   tlsVerify: z.boolean().optional(),
   enabled: z.boolean().optional(),
