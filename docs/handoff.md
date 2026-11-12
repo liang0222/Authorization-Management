@@ -24,7 +24,7 @@
 | --- | --- | --- |
 | `npx tsc --noEmit` | 0 错误 | 每批改动后执行 |
 | `npm run build` | 106/106 静态页 | 生产构建实测（`Generating static pages (106/106)`；路由表 132 条 = 40 ○ + 5 ◐ + 87 ƒ）。**干净副本 `npm ci` 后同样通过**（阶段 0.5 修复后实测，见 2.2 表末行） |
-| 单元测试 | 302 passed (22 files) | `npx vitest run`（含备份加解密 / 状态判定 / cron 校验 / 安装器契约） |
+| 单元测试 | 309 passed (23 files) | `npx vitest run`（含备份加解密 / 状态判定 / cron 校验 / 安装器契约 / 启动闸门四组合） |
 | 集成测试 | 12 passed | `npx vitest run -c vitest.integration.config.ts`，真实 HTTP + PostgreSQL；**必须干净种子**，脏库会让「并发激活」那条偶发 422 |
 | 端到端 | 16 tests in 7 files，实测 **14 passed / 2 failed** | `npx playwright test`（桌面 + Pixel 7，含只读角色 1 条）。失败的两条是 `tests/e2e/05-backups.spec.ts` 的「被策略引用的目标不允许直接删除」与「立即备份 → 完整性校验 → 隔离恢复演练」——它们假设库里已有备份目标/策略，而 `prisma/seed.ts` 不建备份数据，纯净种子下必然失败（详见第 2.3 节） |
 | 备份全链路 | 16 项冒烟全 PASS | 建目标 → 连接测试 → 建策略 → 立即备份 201 `succeeded` → 回读校验 → 隔离恢复演练 `passed` RTO 3s → 概览统计 → 删除被引用目标 409 |
@@ -36,6 +36,9 @@
 | 产品详情页 `licenseByStatus.map` 崩溃 | 已修复 + 已加路由巡检 | 见第 4.13 节 |
 | 22 条路由（含 4 个详情页）渲染无错 | 成立 | `tests/e2e/04-routes.spec.ts`，同时监听 pageerror / console / HTTP 4xx |
 | 授权详情页失效客户链接 | 已修复（补客户档案页） | 见第 4.14 节 |
+| 生产启动闸门硬拦截 | 生效，反例 exit 1 | 判定只看 `NODE_ENV`：生产构建 `bootSafetyIssues()` 非空即 `process.exit(1)`（不依赖 `DEPLOYMENT_ENV`）。隔离副本实测 `NODE_ENV=production` + `DEPLOYMENT_ENV=development` + 开发默认密钥 → `NEG_EXIT=1`、端口未监听、日志列出 5 条 issue。单测 `tests/unit/boot-gate.test.ts` 7 条 |
+| 现网 3100 能否过新闸门 | 0 条 issue，重启不会被拦 | 只读读取生产进程 `/proc/<pid>/environ` 喂给 `bootSafetyIssues()`，逐项只输出「过/不过」：SESSION_SECRET / LICENSE_HMAC_PEPPER / BACKUP_ENCRYPTION_KEY / DEV_MAIL_SINK / DEPLOYMENT_ENV(=production) 全过。3101 沙箱同样 0 条（DEPLOYMENT_ENV=sandbox） |
+| 全站安全响应头 | 齐全，无 `X-Powered-By` | 隔离副本 `next start -p 3015` 实测：`/login` 与 `/app/dashboard` 均 200，带 `X-Frame-Options: DENY`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: strict-origin-when-cross-origin`、`Permissions-Policy: camera=(), microphone=(), geolocation=()`、`Content-Security-Policy-Report-Only`；5 个路径抽查 `x-powered-by` 命中 0；`/metrics` 仍 401（令牌校验未动） |
 
 ### 2.2 已知未做
 
@@ -47,6 +50,8 @@
 | 真实 Webhook 外发校验 | 无外部接收端 | 起一个本地接收器，验签名头与重试退避 |
 | Firefox / WebKit | 只跑 Chromium | `npx playwright install firefox webkit` 后在 config 加 project |
 | 2 条备份 E2E 在纯净种子下必失败 | 用例假设库里已有备份目标/策略，`prisma/seed.ts` 不建备份数据 | 给 `prisma/seed.ts` 补一个本地暂存目标 + 一条策略，或让用例自己 `request.post` 建前置数据 |
+| CSP 仍是 `Report-Only` | 阶段 1 只上观察模式，直接强制会打挂 Next 内联脚本 | 按 `next.config.ts` 注释四步走：观察两周无新违例 → 键名改成 `Content-Security-Policy` → 用 middleware 下发 nonce 替掉 `script-src 'unsafe-inline'` → 先在 3101 验证一周再动 3100 |
+| nginx 与应用层重复下发 `X-Frame-Options` | `docs/DEPLOY-v15.md` 的 nginx 片段有 `add_header X-Frame-Options SAMEORIGIN always;`，应用层现在是 `DENY` | 上生产时删掉 nginx 那条，只留应用层；否则同一响应出现两个值，浏览器解释顺序不确定 |
 | `npm run db:reset` 脚本失效 | `prisma migrate reset --force --skip-seed` 在 Prisma 7.10.1 报 `unknown or unexpected option: --skip-seed`（exit 1） | 改成 `prisma migrate reset --force`（会连带跑 seed），或删掉 `--skip-seed` 参数 |
 | ~~干净安装后 `npm run build` 必失败~~ **已修复（阶段 0.5）** | `cpu-features` 是 `ssh2` 的 optionalDependency，带原生 addon `build/Release/cpufeatures.node`；干净 `npm ci` 会装上并编译成功，Turbopack 打包 `ssh2`（经 `src/lib/services/backup/adapters/sftp.ts` → `src/instrumentation.ts`）时报 `non-ecmascript placeable asset` | 修法：`next.config.ts` 里 `turbopack.resolveAlias` 把 `cpu-features` 指到 `src/lib/shims/cpu-features-noop.cjs`（返回 `undefined`），等价于「该可选包不存在」，加密回退纯 JS。**不要再试**：`serverExternalPackages` 无效；`--omit=optional` 会连带移除 `pg-cloudflare` 改报 `Module not found`。干净副本 `npm ci` → build exit 0 / 106 静态页 / 302 单元 / SFTP 真实往返全 PASS，见 [`test-report.md`](test-report.md) 第 1.1 节 |
 
@@ -57,7 +62,7 @@
 | 页面 49 | `find src/app -name 'page.tsx' \| wc -l` | 后台 26 + 开发者文档 17 + 认证 3 + 根 1 + `/install` 1 + `/openapi` 1 |
 | API 路由 74 | `find src/app/api -name 'route.ts' \| wc -l` | `api/install` 4 + `api/v1/admin` 54 + `api/v1/auth` 5 + `api/v1` 公开 11 |
 | route handler 82 | `find src/app -name 'route.ts' \| wc -l` | 74 + `developers/` 5 + `/health/live`·`/health/ready`·`/metrics` 3 |
-| 单元 302 / 22 文件 | `npx vitest run` | `Test Files 22 passed (22) / Tests 302 passed (302)` |
+| 单元 309 / 23 文件 | `npx vitest run` | `Test Files 23 passed (23) / Tests 309 passed (309)` |
 | 集成 12 | `npx vitest run -c vitest.integration.config.ts` | `Tests 12 passed (12)`（先 `npm run db:seed`） |
 | 端到端 16 / 7 文件 | `npx playwright test --list` | `Total: 16 tests in 7 files`；实测 14 passed / 2 failed |
 | 静态页 106 | `npm run build` | `✓ Generating static pages using 3 workers (106/106)` |

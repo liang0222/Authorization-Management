@@ -124,6 +124,24 @@ export function productionSafetyIssues(): string[] {
   if (!VALID_ENVS.has(config.deploymentEnv)) {
     issues.push(`DEPLOYMENT_ENV 只能是 production / sandbox / development，当前是 ${config.deploymentEnv}`);
   }
+  /**
+   * `NODE_ENV=production` 的进程必须是生产身份（sandbox 除外）。
+   *
+   * 这条是阶段 1 补的：早先闸门只看 `DEPLOYMENT_ENV`，于是
+   * `NODE_ENV=production` + `DEPLOYMENT_ENV=development` 会带着开发默认密钥照常启动，
+   * 闸门形同虚设（本轮在隔离副本上实测过）。现在这种组合本身就是一条 issue。
+   *
+   * 为什么把 sandbox 排在外面：沙箱跑的就是同一份生产构建
+   * （`npm run start` 必然 `NODE_ENV=production`），但它是**显式声明的隔离部署**——
+   * 独立数据库、独立签名密钥目录、独立端口与独立凭证池（规格 27.3），
+   * 下方还会单独要求它的 `.keys` / `.backups` 不得与生产共用。
+   * 一并拦掉会让现网 3101 沙箱下次重启直接起不来，属于误伤。
+   */
+  if (config.isProduction && config.deploymentEnv !== "production" && config.deploymentEnv !== "sandbox") {
+    issues.push(
+      `NODE_ENV=production 但 DEPLOYMENT_ENV 不是 production（当前是 ${config.deploymentEnv}）：生产构建跑在开发配置上`,
+    );
+  }
   // 签名密钥按环境分目录：Sandbox 的私钥绝不能签生产授权。
   if (config.deploymentEnv === "production" && config.signingKeyDir === DEV_DEFAULTS.SIGNING_KEY_DIR) {
     issues.push("生产的 SIGNING_KEY_DIR 不能与开发共用 .keys");

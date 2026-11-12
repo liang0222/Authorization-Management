@@ -10,6 +10,36 @@ Release Note、commit、迁移 ID 与回滚方式。
 
 ## [Unreleased]
 
+### 安全 · 生产启动闸门硬拦截 + 全站安全响应头（阶段 1）
+
+阶段 0 实测过一个真问题：`NODE_ENV=production` + `DEPLOYMENT_ENV=development` + 开发默认密钥 +
+`DEV_MAIL_SINK=true` 时，服务只打印一行 `[boot] ... 配置检查未通过` 就照常启动。根因是闸门判的是
+`DEPLOYMENT_ENV`，而生产构建的身份由 `NODE_ENV` 决定。
+
+- **闸门（`src/instrumentation.ts` / `src/lib/config.ts`）**：新增 `bootMustFail()`，只看
+  `NODE_ENV=production`——`bootSafetyIssues()` 非空一律让进程以非零码退出，与 `DEPLOYMENT_ENV` 写什么无关；
+  并把「`NODE_ENV=production` 但 `DEPLOYMENT_ENV` 是 development」本身列为一条 issue。
+  `sandbox` 故意排除在外：现网 3101 就是 `NODE_ENV=production` + `DEPLOYMENT_ENV=sandbox` 的显式隔离部署，
+  另有「`.keys`/`.backups` 不得与生产共用」的独立规则兜底，一并拦会误伤沙箱重启。
+- **为什么不是「只 throw」**：Next 16 会吞掉 instrumentation 异常，只打
+  `Failed to prepare server ... loading instrumentation hook` 并**继续监听端口**，所有请求回 500，
+  systemd 仍显示 `active`、`Restart=on-failure` 不触发（本轮实测）。半活状态比直接死更难发现，
+  所以改成「打印完整 issue 清单 + `process.exit(1)`」。判定逻辑仍是纯函数，单测直接覆盖。
+- **响应头（`next.config.ts`）**：`poweredByHeader: false`；全站 `/:path*` 下发
+  `X-Frame-Options: DENY`、`X-Content-Type-Options: nosniff`、
+  `Referrer-Policy: strict-origin-when-cross-origin`、`Permissions-Policy: camera=(), microphone=(), geolocation=()`
+  与 `Content-Security-Policy-Report-Only`（先观察，避免内联脚本被打挂；转正式头的四步写在配置注释里）。
+  `/metrics` 的令牌校验未改动。
+- **验证**：新增 `tests/unit/boot-gate.test.ts` 7 条（四组合 + 沙箱例外 + 沙箱共用目录仍拦）；
+  隔离副本 `npm ci` → `tsc --noEmit` exit 0 / `npm run test` 309 passed (23 files) / `npm run build` exit 0、106 静态页；
+  反例 `NODE_ENV=production` + `DEPLOYMENT_ENV=development` → `NEG_EXIT=1`、端口未监听、日志列出 5 条 issue；
+  正例（专用库/端口 3015）`/login` 与 `/app/dashboard` 均 200 且五个头齐全、`x-powered-by` 命中 0。
+- **现网体检（只读，未改环境变量、未重启）**：3100 生产进程的三把密钥与 `DEV_MAIL_SINK`/`DEPLOYMENT_ENV`
+  在新闸门下逐项全过、issue 0 条，下次重启不会被拦；3101 沙箱同样 0 条。
+- 记录更新：`README.md` §7、`docs/test-report.md` §1.2（新增验收小节）、`docs/handoff.md` §2.1/§2.2/§2.3。
+- 顺带发现（未修，留阶段 5）：未登录 `GET /app/dashboard` 返回 200，现网 3100 同样如此——
+  登录态是客户端判定的，服务端不拦。
+
 ### 构建 · 干净安装不再因 `cpu-features` 构建失败（阶段 0.5）
 
 上一轮（阶段 0）如实登记过一个阻断项：干净副本 `npm install` / `npm ci` 之后 `npm run build`

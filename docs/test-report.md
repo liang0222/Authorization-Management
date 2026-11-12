@@ -23,7 +23,7 @@ Playwright 1.64.1（Chromium 1248）
 | 类型检查 | `npm run typecheck`（= `tsc --noEmit`） | **0 错误** | ~20s |
 | OpenAPI lint | `npm run lint:openapi` | **通过**（结构 / schema / servers / 凭证泄漏 / YAML↔JSON 同步） | ~1s |
 | 生产构建 | `npm run build` | **成功，106/106 静态页**；路由表 132 条 = 40 ○ + 5 ◐ + 87 ƒ（干净副本 `npm ci` 后同样通过，见 1.1） | ~50s |
-| 单元测试 | `npm run test`（= `npx vitest run`） | **302 passed (22 files)** | 3.1s |
+| 单元测试 | `npm run test`（= `npx vitest run`） | **309 passed (23 files)**（阶段 1 新增 7 条启动闸门用例） | 3.1s |
 | 集成测试 | `npx vitest run -c vitest.integration.config.ts` | **12 passed** | 15.4s |
 | 端到端 | `npx playwright test` | **16 tests in 7 files：14 passed / 2 failed** | 2.7m |
 
@@ -142,7 +142,93 @@ turbopack: {
 
 ---
 
-## 2. 单元测试（302 个 / 22 个文件）
+### 1.2 启动闸门与安全响应头（阶段 1 实测）
+
+阶段 1 修两件事：①生产启动闸门只警告不拦截；②全站没有任何安全响应头。
+下表全部是隔离副本（`/root/s1`，`npm ci` + `npx prisma generate` + 专用库 `licensing_s1`）上的真实输出，
+主工作区没有跑过 `npm ci`/`npm install`，也没有重启过 3100/3101。
+
+| 验收项 | 命令 | 真实结果 |
+| --- | --- | --- |
+| 闸门单测 | `npx vitest run tests/unit/boot-gate.test.ts` | **7 passed**（四组合 + 沙箱例外 + 沙箱共用目录仍拦） |
+| 全量单测 | `npm run test` | **309 passed (23 files)** |
+| 类型检查 | `npx tsc --noEmit` | exit 0 |
+| 生产构建 | `npm run build` | exit 0，`✓ Generating static pages (106/106)`，路由 132 条 |
+| 反例：生产构建跑开发配置 | 见下 | **exit 1，端口未监听**，日志列出 5 条 issue |
+| 正例：正常生产配置 | 见下 | `/login` 与 `/app/dashboard` 均 200，四项安全头齐全，无 `X-Powered-By` |
+
+**反例实证**（`NODE_ENV=production` + `DEPLOYMENT_ENV=development` + 开发默认密钥 + `DEV_MAIL_SINK=true`，专用端口 3014）：
+
+```
+NEG_EXIT=1
+=== 是否还监听 3014 ===
+未监听
+=== 日志 ===
+▲ Next.js 16.4.3
+- Local:         http://127.0.0.1:3014
+- Network:       http://127.0.0.1:3014
+✓ Ready in 203ms
+✓ Running next.config.ts took 61ms
+[boot] NODE_ENV=production env=development 配置检查未通过：
+- NODE_ENV=production 但 DEPLOYMENT_ENV 不是 production（当前是 development）：生产构建跑在开发配置上
+- SESSION_SECRET 仍是开发默认值
+- LICENSE_HMAC_PEPPER 仍是开发默认值
+- DEV_MAIL_SINK 必须为 false
+- BACKUP_ENCRYPTION_KEY 仍是开发默认值
+```
+
+**这里偏离了「只 throw」的原始要求，原因有实测证据**：只 `throw` 时 Next 16 会把异常包成
+`Failed to prepare server Error: An error occurred while loading instrumentation hook`，
+进程**继续监听端口**（`ss` 看到 3014 LISTEN）、每个请求回 500（`/login` → HTTP=500），
+而 systemd 看到的是 `active`，`Restart=on-failure` 根本不会触发——半活状态比直接死更难发现。
+改成「打印完整 issue 清单 + `process.exit(1)`」后才得到上面的 `NEG_EXIT=1` 与「未监听」。
+判定逻辑本身（`bootMustFail`）仍是纯函数，单测直接覆盖。
+
+**正例实证**（`NODE_ENV=production` + `DEPLOYMENT_ENV=production` + 三把密钥全随机 + `DEV_MAIL_SINK=false`，
+专用端口 3015 / 专用库 / `.keys-s1`）：
+
+```
+[boot] env=production signingKeyDir=.keys-s1 backupDir=.backups-s1 配置检查通过
+[webhook] dispatcher started, interval=5000ms
+[backup] scheduler started, interval=30000ms
+
+=== GET /login 头 ===
+HTTP/1.1 200 OK
+X-Frame-Options: DENY
+X-Content-Type-Options: nosniff
+Referrer-Policy: strict-origin-when-cross-origin
+Permissions-Policy: camera=(), microphone=(), geolocation=()
+Content-Security-Policy-Report-Only: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self';
+
+=== GET /app/dashboard（未登录） ===
+HTTP/1.1 200 OK  （同样带齐上面五个头）
+```
+
+`X-Powered-By` 抽查（`/login`、`/app/dashboard`、`/health/ready`、`/metrics`、`/openapi`）：
+命中数全部为 **0**；`/metrics` 仍是 `401`（既有令牌校验没被改动）。
+
+**现网 3100 的体检结论（只读，没改任何环境变量、没重启）**：把生产进程 `/proc/<pid>/environ`
+喂给阶段 1 的 `bootSafetyIssues()`，逐项只输出「过/不过」、不打印任何值：
+
+```
+SESSION_SECRET           过
+LICENSE_HMAC_PEPPER      过
+BACKUP_ENCRYPTION_KEY    过
+DEV_MAIL_SINK            过
+DEPLOYMENT_ENV           过（=production）
+新闸门 bootSafetyIssues 下该配置的 issue 总数：0
+结论：重启不会被拦
+```
+
+3101 沙箱（`NODE_ENV=production` + `DEPLOYMENT_ENV=sandbox` + `.keys-sandbox`）同样 **0 条 issue**，
+所以「`NODE_ENV=production` 但 `DEPLOYMENT_ENV` 不是 production」那条规则特意把 sandbox 排除在外——
+否则现网沙箱下次重启会被自己的闸门拦住（详见 `src/lib/config.ts` 里那段注释）。
+
+**顺带发现（未修，属阶段 5 范围）**：未登录直接 `GET /app/dashboard` 返回 200（登录后也是 200），
+现网 3100 同样如此，说明页面的登录态是客户端判定的、服务端不拦；这不是阶段 1 引入的，
+记在这里避免阶段 5「越权矩阵」漏掉。
+
+## 2. 单元测试（309 个 / 23 个文件）
 
 只测纯函数与领域规则，不碰数据库、不 mock 业务分支。
 

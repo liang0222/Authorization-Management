@@ -867,9 +867,13 @@ server {
 
     client_max_body_size 8m;
 
-    add_header X-Content-Type-Options nosniff always;
-    add_header X-Frame-Options SAMEORIGIN always;
-    add_header Referrer-Policy strict-origin-when-cross-origin always;
+    # 阶段 1 起，应用层（next.config.ts）已对 /:path* 统一下发
+    # X-Frame-Options: DENY / X-Content-Type-Options / Referrer-Policy / Permissions-Policy / CSP(Report-Only)。
+    # 下面这几条是给「万一应用层没生效」兜底的，保留会和上游头的值重复（两个 X-Frame-Options、SAMEORIGIN 与 DENY 打架）。
+    # 二选一：要么删掉下面这几行只留应用层，要么把应用层的同名头关掉只留 nginx。不要两处都开。
+    # add_header X-Content-Type-Options nosniff always;
+    # add_header X-Frame-Options SAMEORIGIN always;
+    # add_header Referrer-Policy strict-origin-when-cross-origin always;
     add_header Strict-Transport-Security "max-age=31536000" always;
 
     # 指标端点只给本机监控用，公网一律拒绝（应用层还要求 Bearer 令牌）
@@ -1059,9 +1063,13 @@ server {
 
     client_max_body_size 8m;
 
-    add_header X-Content-Type-Options nosniff always;
-    add_header X-Frame-Options SAMEORIGIN always;
-    add_header Referrer-Policy strict-origin-when-cross-origin always;
+    # 阶段 1 起，应用层（next.config.ts）已对 /:path* 统一下发
+    # X-Frame-Options: DENY / X-Content-Type-Options / Referrer-Policy / Permissions-Policy / CSP(Report-Only)。
+    # 下面这几条是给「万一应用层没生效」兜底的，保留会和上游头的值重复（两个 X-Frame-Options、SAMEORIGIN 与 DENY 打架）。
+    # 二选一：要么删掉下面这几行只留应用层，要么把应用层的同名头关掉只留 nginx。不要两处都开。
+    # add_header X-Content-Type-Options nosniff always;
+    # add_header X-Frame-Options SAMEORIGIN always;
+    # add_header Referrer-Policy strict-origin-when-cross-origin always;
     add_header Strict-Transport-Security "max-age=31536000" always;
 
     # 沙箱实例也跑 /metrics，公网一律拒绝。

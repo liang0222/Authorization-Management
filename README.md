@@ -319,4 +319,17 @@ docs/                         交付文档（见下）
 - 所有写操作要求 CSRF 双提交令牌；
 - 每个管理写操作都写 `audit_logs`（含前后值 diff，敏感字段脱敏）；
 - Webhook 出站强制 SSRF 校验（私网/链路本地/云元数据/CGNAT/IPv6 ULA 全拒，DNS 解析后逐 IP 复核）；
-- 生产启动闸门：使用开发默认密钥、共用开发签名目录、`DEV_MAIL_SINK=true` 时直接拒绝启动。
+- **生产启动闸门（阶段 1 收紧）**：判定只看 `NODE_ENV`——生产构建只要 `bootSafetyIssues()` 非空就
+  `process.exit(1)`，与 `DEPLOYMENT_ENV` 写什么都无关。拦的是：`SESSION_SECRET` / `LICENSE_HMAC_PEPPER` /
+  `BACKUP_ENCRYPTION_KEY` 仍是开发默认值、`DEV_MAIL_SINK≠false`、生产共用开发签名目录、
+  以及「`NODE_ENV=production` 但 `DEPLOYMENT_ENV` 是 development」这种把生产构建当开发跑的错配
+  （sandbox 例外：它是显式隔离部署，另有 `.keys` / `.backups` 不得与生产共用的独立规则）。
+  只 `throw` 不够——Next 16 会吞掉 instrumentation 异常并继续监听端口、所有请求回 500，
+  systemd 仍显示 `active`，所以这里显式退出；单测在 `tests/unit/boot-gate.test.ts`；
+- **全站安全响应头（阶段 1）**：`next.config.ts` 关掉 `X-Powered-By`，并对 `/:path*` 统一下发
+  `X-Frame-Options: DENY`、`X-Content-Type-Options: nosniff`、
+  `Referrer-Policy: strict-origin-when-cross-origin`、`Permissions-Policy`（关 camera/microphone/geolocation）
+  与 `Content-Security-Policy-Report-Only`（先只报告不拦截，避免 Next 内联脚本被打挂；
+  转正式头的步骤写在 `next.config.ts` 的注释里）。
+  注意反向代理：`docs/DEPLOY-v15.md` 的 nginx 片段也加了 `X-Frame-Options SAMEORIGIN`，
+  上生产时删掉 nginx 那条，只留应用层，否则同一响应里出现两个 `X-Frame-Options`。

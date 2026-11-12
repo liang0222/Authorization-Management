@@ -5,7 +5,8 @@ import { backgroundWorkersAllowed, startBackgroundWorkers } from "@/lib/backgrou
  * 服务端启动钩子。
  *
  * 这里做两件事，顺序不能反：
- * 1. **环境安全闸门**：`DEPLOYMENT_ENV=production` 时校验密钥与配置，不通过就让启动失败。
+ * 1. **环境安全闸门**：`NODE_ENV=production` 时校验密钥与配置，有任何一条不通过就让启动失败
+ *    （与 `DEPLOYMENT_ENV` 无关，判定见 `bootMustFail`）。
  *    放在后台任务之前，是因为带着开发默认私钥跑起来再报警已经太晚——那段时间里
  *    签发的授权都是用可预测密钥签的。
  * 2. **常驻后台任务**：Webhook 投递器、备份调度器。Next 的 route handler 是被动的，
@@ -41,16 +42,39 @@ export function bootSafetyIssues(): string[] {
   return issues;
 }
 
+/**
+ * 是否必须让启动失败。
+ *
+ * **只看 `NODE_ENV`**：生产构建（`NODE_ENV=production`）一律硬拦截，与 `DEPLOYMENT_ENV` 无关。
+ * 早先这里判的是 `config.deploymentEnv === "production"`，于是
+ * `NODE_ENV=production` + `DEPLOYMENT_ENV=development` + 开发默认密钥 + `DEV_MAIL_SINK=true`
+ * 只打一行警告就照常启动——闸门形同虚设（阶段 1 前的实测结论）。
+ *
+ * 独立导出是为了让单测直接验证判定，不必真的拉起 Next。
+ */
+export function bootMustFail(issues: string[]): boolean {
+  return config.isProduction && issues.length > 0;
+}
+
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
 
   const issues = bootSafetyIssues();
   if (issues.length > 0) {
-    const header = `[boot] ${config.deploymentEnv} 环境配置检查未通过：`;
-    if (config.deploymentEnv === "production") {
-      // 直接抛：Next 把启动标记为失败，systemd 的 Restart=on-failure 会重试，
-      // 运维在 journalctl 里立刻看到原因，而不是跑了几周才发现密钥是默认值。
-      throw new Error(`${header}\n- ${issues.join("\n- ")}`);
+    const header = `[boot] NODE_ENV=${process.env.NODE_ENV ?? "未设置"} env=${config.deploymentEnv} 配置检查未通过：`;
+    if (bootMustFail(issues)) {
+      const message = `${header}\n- ${issues.join("\n- ")}`;
+      /**
+       * 只 throw 不够：Next 16 会把 instrumentation 的异常包成
+       * `Failed to prepare server Error: An error occurred while loading instrumentation hook`
+       * 然后**继续监听端口**，每个请求回 500，而 systemd 看到的是 `active`，
+       * `Restart=on-failure` 不会触发，运维只会看到「服务在跑但全 500」（阶段 1 实测）。
+       * 生产构建配置不合法时，半活比直接死更危险：健康检查探不到、重启不生效、
+       * 还可能被误认为「已经在跑」。所以这里先按原样打印完整 issue 清单，
+       * 再显式 `process.exit(1)`——语义上就是「启动失败」，只是绕开了 Next 的吞异常。
+       */
+      console.error(message);
+      process.exit(1);
     }
     console.warn(`${header}\n- ${issues.join("\n- ")}`);
   } else {
