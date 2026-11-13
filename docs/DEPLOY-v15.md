@@ -15,6 +15,10 @@
 
 ---
 
+> **全新部署先看这里**：从 GitHub 在一台新机器上全新上线（不恢复旧数据），走
+> [`DEPLOYMENT-TUTORIAL.md`](DEPLOYMENT-TUTORIAL.md) 的干净首启路径，步骤更短；
+> 本篇是迁移/恢复路线与参数深挖的参考手册。
+
 ## 0. 先读这一段：三个会把你坑死的点
 
 1. **本项目没有 `/api/health`**。真实健康端点是 `/api/v1/status`（业务状态）和 `/health/live`、`/health/ready`（探针）。拿 `/api/health` 测会一直 404。

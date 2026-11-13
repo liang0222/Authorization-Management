@@ -304,6 +304,8 @@ docs/                         交付文档（见下）
 
 | 文件 | 内容 |
 | --- | --- |
+| [`docs/DEPLOYMENT-TUTORIAL.md`](docs/DEPLOYMENT-TUTORIAL.md) | **部署教程（全新部署入口）**：从 GitHub 拉代码到上线的完整步骤——机器初始化、生产 env、一键部署、干净首启、反代与 HTTPS、上线验收清单 |
+| [`docs/DEPLOY-v15.md`](docs/DEPLOY-v15.md) | 部署参考手册：迁移/恢复 dump 路线、参数深挖、沙箱双实例与完整排障表 |
 | [`docs/v15-runbook.md`](docs/v15-runbook.md) | 部署形态、日常命令、发布、备份恢复、私钥离线备份、沙箱重建、回滚、常见故障 |
 | [`docs/operations.md`](docs/operations.md) | 发布管理、容量与成本、事件响应（含密钥泄漏处置与客户通告模板）、状态页、日常任务 |
 | [`docs/observability.md`](docs/observability.md) | `/health/live`·`/health/ready`·`/metrics`、指标清单、日志前缀、告警分级、排障路径 |
