@@ -8,9 +8,11 @@
  * 运行：npm run db:seed
  *
  * 正式部署首选干净首启模式（不灌演示业务数据）：
- *   SEED_MODE=core SEED_CORE_ADMIN_EMAIL=<管理员邮箱> SEED_CORE_ADMIN_PASSWORD=<强口令> npm run db:seed
+ *   SEED_MODE=core SEED_CORE_ADMIN_PASSWORD=<强口令> npm run db:seed
  * 只建组织、一个真实管理员、签名密钥与产品/套餐骨架；演示账号、客户、授权、
- * 激活、Webhook 与日志一律不建。
+ * 激活、Webhook 与日志一律不建。管理员邮箱默认 admin@zming.de、组织名默认
+ * 子铭科技有限公司（均可经环境变量覆盖）；口令不设默认值——它是生产管理员
+ * 口令，写进仓库等于公开，只能部署时经环境变量给出。
  */
 import { createHash, createHmac, generateKeyPairSync, randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -70,11 +72,13 @@ const CLIENT_IDS =
  * - `full`（默认）：本地开发/演示用，灌全部演示数据（含演示账号与演示客户/授权）。
  * - `core`：正式部署的干净首启。只建组织、一个真实管理员、产品/套餐骨架与签名密钥，
  *   不建演示账号、演示客户、授权、激活、Webhook 与日志，生产启动闸门不会命中演示账号。
- * core 模式的管理员身份只能来自环境变量，且不得命中演示账号标识
- * （`@xinglan.dev` 域名或演示显示名，见 src/lib/demo-accounts.ts），命中直接拒绝执行。
+ * core 模式的管理员口令只能来自环境变量（不设默认值——写进仓库等于公开）；
+ * 邮箱默认 `admin@zming.de`、组织名默认「子铭科技有限公司」，均可经环境变量覆盖。
+ * 管理员身份不得命中演示账号标识（`@xinglan.dev` 域名或演示显示名，
+ * 见 src/lib/demo-accounts.ts），命中直接拒绝执行。
  */
 const SEED_MODE = process.env.SEED_MODE === "core" ? "core" : "full";
-const CORE_ADMIN_EMAIL = (process.env.SEED_CORE_ADMIN_EMAIL ?? "").trim().toLowerCase();
+const CORE_ADMIN_EMAIL = (process.env.SEED_CORE_ADMIN_EMAIL?.trim() || "admin@zming.de").toLowerCase();
 const CORE_ADMIN_PASSWORD = process.env.SEED_CORE_ADMIN_PASSWORD ?? "";
 const CORE_ADMIN_NAME = (process.env.SEED_CORE_ADMIN_NAME ?? "").trim() || "Admin";
 const CORE_ORG_NAME = (process.env.SEED_CORE_ORG_NAME ?? "").trim() || "子铭科技有限公司";
@@ -82,8 +86,8 @@ const CORE_ORG_SLUG = (process.env.SEED_CORE_ORG_SLUG ?? "").trim() || "ziming";
 
 if (SEED_MODE === "core") {
   const problems: string[] = [];
-  if (!CORE_ADMIN_EMAIL || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(CORE_ADMIN_EMAIL)) {
-    problems.push("SEED_CORE_ADMIN_EMAIL 未设置或不是合法邮箱");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(CORE_ADMIN_EMAIL)) {
+    problems.push("SEED_CORE_ADMIN_EMAIL 不是合法邮箱");
   } else if (CORE_ADMIN_EMAIL.endsWith(`@${DEMO_EMAIL_DOMAIN}`)) {
     problems.push(`SEED_CORE_ADMIN_EMAIL 不得使用演示域名 @${DEMO_EMAIL_DOMAIN}`);
   }

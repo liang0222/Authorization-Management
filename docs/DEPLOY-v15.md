@@ -390,9 +390,12 @@ SEED_CORE_ADMIN_PASSWORD=<强口令> \
 npm run db:seed
 ```
 
-可选变量：`SEED_CORE_ADMIN_NAME`（默认 `Admin`）、`SEED_CORE_ORG_NAME`（默认 `子铭科技有限公司`）、
+可选变量：`SEED_CORE_ADMIN_EMAIL`（默认 `admin@zming.de`，示例里的邮箱可省略）、
+`SEED_CORE_ADMIN_NAME`（默认 `Admin`）、`SEED_CORE_ORG_NAME`（默认 `子铭科技有限公司`）、
 `SEED_CORE_ORG_SLUG`（默认 `ziming`）。管理员邮箱不得使用 `@xinglan.dev`、显示名不得使用演示
 显示名、口令必须通过口令策略校验；任一不合规，seed 会在 TRUNCATE 之前直接拒绝执行。
+口令（`SEED_CORE_ADMIN_PASSWORD`）不设默认值：它是生产管理员口令，写进仓库等于公开，
+只能在部署时经环境变量给出。
 
 ### 4.3 验证数据
 
