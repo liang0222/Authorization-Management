@@ -388,7 +388,7 @@ else
     echo
     echo "${GREEN}全部通过。${NC} 下一步："
     echo "  1) 配反向代理与证书：docs/DEPLOY-v15.md §8"
-    echo "  2) 去后台改掉种子密码：owner@xinglan.dev / License#2026"
+    echo "  2) 去后台改掉种子密码：owner@xinglan.dev / License#2026（若用 SEED_MODE=core 干净首启则免，见 docs/DEPLOY-v15.md §4.2 干净首启）"
     echo "  3) 配异地备份：docs/DEPLOY-v15.md §9"
   else
     echo

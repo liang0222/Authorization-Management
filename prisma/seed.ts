@@ -6,13 +6,19 @@
  * 客户、各状态授权、设备激活、验证日志、审计日志、Webhook 投递。
  *
  * 运行：npm run db:seed
+ *
+ * 正式部署首选干净首启模式（不灌演示业务数据）：
+ *   SEED_MODE=core SEED_CORE_ADMIN_EMAIL=<管理员邮箱> SEED_CORE_ADMIN_PASSWORD=<强口令> npm run db:seed
+ * 只建组织、一个真实管理员、签名密钥与产品/套餐骨架；演示账号、客户、授权、
+ * 激活、Webhook 与日志一律不建。
  */
 import { createHash, createHmac, generateKeyPairSync, randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client";
-import { hashPassword } from "../src/lib/auth/password";
+import { hashPassword, passwordPolicyIssues } from "../src/lib/auth/password";
+import { DEMO_DISPLAY_NAMES, DEMO_EMAIL_DOMAIN } from "../src/lib/demo-accounts";
 import { addDuration } from "../src/lib/domain/period";
 import { ALL_PERMISSION_CODES, ROLE_PRESETS } from "../src/lib/domain/permissions";
 import { seedGuardDecision } from "../src/lib/seed-guard";
@@ -58,6 +64,45 @@ const CLIENT_IDS =
         miniapp: "cs_miniapp_5f8c2d1e6a",
         gateway: "cs_gateway_9a1b3c7d2e",
       };
+
+/**
+ * 种子模式：
+ * - `full`（默认）：本地开发/演示用，灌全部演示数据（含演示账号与演示客户/授权）。
+ * - `core`：正式部署的干净首启。只建组织、一个真实管理员、产品/套餐骨架与签名密钥，
+ *   不建演示账号、演示客户、授权、激活、Webhook 与日志，生产启动闸门不会命中演示账号。
+ * core 模式的管理员身份只能来自环境变量，且不得命中演示账号标识
+ * （`@xinglan.dev` 域名或演示显示名，见 src/lib/demo-accounts.ts），命中直接拒绝执行。
+ */
+const SEED_MODE = process.env.SEED_MODE === "core" ? "core" : "full";
+const CORE_ADMIN_EMAIL = (process.env.SEED_CORE_ADMIN_EMAIL ?? "").trim().toLowerCase();
+const CORE_ADMIN_PASSWORD = process.env.SEED_CORE_ADMIN_PASSWORD ?? "";
+const CORE_ADMIN_NAME = (process.env.SEED_CORE_ADMIN_NAME ?? "").trim() || "Admin";
+const CORE_ORG_NAME = (process.env.SEED_CORE_ORG_NAME ?? "").trim() || "子铭科技有限公司";
+const CORE_ORG_SLUG = (process.env.SEED_CORE_ORG_SLUG ?? "").trim() || "ziming";
+
+if (SEED_MODE === "core") {
+  const problems: string[] = [];
+  if (!CORE_ADMIN_EMAIL || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(CORE_ADMIN_EMAIL)) {
+    problems.push("SEED_CORE_ADMIN_EMAIL 未设置或不是合法邮箱");
+  } else if (CORE_ADMIN_EMAIL.endsWith(`@${DEMO_EMAIL_DOMAIN}`)) {
+    problems.push(`SEED_CORE_ADMIN_EMAIL 不得使用演示域名 @${DEMO_EMAIL_DOMAIN}`);
+  }
+  if (!CORE_ADMIN_PASSWORD) {
+    problems.push("SEED_CORE_ADMIN_PASSWORD 未设置");
+  } else {
+    problems.push(...passwordPolicyIssues(CORE_ADMIN_PASSWORD).map((issue) => `SEED_CORE_ADMIN_PASSWORD ${issue}`));
+  }
+  if ((DEMO_DISPLAY_NAMES as readonly string[]).includes(CORE_ADMIN_NAME)) {
+    problems.push("SEED_CORE_ADMIN_NAME 不得使用演示账号的显示名");
+  }
+  if (problems.length > 0) {
+    console.error(`SEED_MODE=core 配置不合规，已拒绝执行：\n${problems.map((p) => `  - ${p}`).join("\n")}`);
+    process.exit(1);
+  }
+  if (seedGuard.warning) {
+    console.log("注意：当前为 SEED_MODE=core 干净首启，管理员口令来自 SEED_CORE_ADMIN_PASSWORD（非演示口令），上面的演示口令警告不适用。");
+  }
+}
 
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: DATABASE_URL }) });
 
@@ -106,8 +151,8 @@ async function main() {
   // ---------------------------------------------------------------- 组织与权限
   const organization = await prisma.organizations.create({
     data: {
-      name: "星岚软件",
-      slug: "xinglan-software",
+      name: SEED_MODE === "core" ? CORE_ORG_NAME : "星岚软件",
+      slug: SEED_MODE === "core" ? CORE_ORG_SLUG : "xinglan-software",
       timezone: TIMEZONE,
       settings: {
         apiRequestLogRetentionDays: 30,
@@ -140,38 +185,52 @@ async function main() {
     });
   }
 
-  const password = await hashPassword("License#2026");
+  // core 模式只建一个真实管理员（身份来自环境变量）；ops/viewer 在 core 下不建账号，
+  // 仅借用 owner 这一行让下方演示段的引用在类型上成立——演示段在 core 模式整体跳过。
+  const password = await hashPassword(SEED_MODE === "core" ? CORE_ADMIN_PASSWORD : "License#2026");
   const owner = await prisma.users.create({
-    data: {
-      email: "owner@xinglan.dev",
-      password_hash: password,
-      display_name: "陈星岚",
-      last_login_at: hoursAgo(2),
-    },
+    data:
+      SEED_MODE === "core"
+        ? { email: CORE_ADMIN_EMAIL, password_hash: password, display_name: CORE_ADMIN_NAME }
+        : {
+            email: "owner@xinglan.dev",
+            password_hash: password,
+            display_name: "陈星岚",
+            last_login_at: hoursAgo(2),
+          },
   });
-  const ops = await prisma.users.create({
-    data: {
-      email: "ops@xinglan.dev",
-      password_hash: password,
-      display_name: "林可",
-      last_login_at: hoursAgo(20),
-    },
-  });
-  const viewer = await prisma.users.create({
-    data: {
-      email: "audit@xinglan.dev",
-      password_hash: password,
-      display_name: "周睿（审计）",
-      last_login_at: daysAgo(3),
-    },
-  });
+  const ops =
+    SEED_MODE === "core"
+      ? owner
+      : await prisma.users.create({
+          data: {
+            email: "ops@xinglan.dev",
+            password_hash: password,
+            display_name: "林可",
+            last_login_at: hoursAgo(20),
+          },
+        });
+  const viewer =
+    SEED_MODE === "core"
+      ? owner
+      : await prisma.users.create({
+          data: {
+            email: "audit@xinglan.dev",
+            password_hash: password,
+            display_name: "周睿（审计）",
+            last_login_at: daysAgo(3),
+          },
+        });
 
   await prisma.organization_memberships.createMany({
-    data: [
-      { organization_id: organizationId, user_id: owner.id, role_id: roleIds.get("owner")! },
-      { organization_id: organizationId, user_id: ops.id, role_id: roleIds.get("operator")! },
-      { organization_id: organizationId, user_id: viewer.id, role_id: roleIds.get("viewer")! },
-    ],
+    data:
+      SEED_MODE === "core"
+        ? [{ organization_id: organizationId, user_id: owner.id, role_id: roleIds.get("owner")! }]
+        : [
+            { organization_id: organizationId, user_id: owner.id, role_id: roleIds.get("owner")! },
+            { organization_id: organizationId, user_id: ops.id, role_id: roleIds.get("operator")! },
+            { organization_id: organizationId, user_id: viewer.id, role_id: roleIds.get("viewer")! },
+          ],
   });
 
   // ---------------------------------------------------------------- 产品
@@ -496,6 +555,13 @@ async function main() {
       list.push({ id: plan.id, key: def.key, duration: def.duration, maxDevices: def.maxDevices, maxActivationCount: def.maxActivationCount, maxSubjects: def.maxSubjects, features });
     }
     plansByProduct.set(product.id, list);
+  }
+
+  if (SEED_MODE === "core") {
+    console.log(
+      `干净首启完成：1 个组织（${CORE_ORG_NAME}）、1 个管理员（${CORE_ADMIN_EMAIL}）、${products.length} 个产品与套餐骨架、签名密钥已生成；未灌演示客户/授权/激活/Webhook/日志。`,
+    );
+    return;
   }
 
   // ---------------------------------------------------------------- 客户

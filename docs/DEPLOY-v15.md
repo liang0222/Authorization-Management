@@ -376,6 +376,24 @@ SQL
 （退出码 1）。全新初始化确实要灌演示数据时，显式加 `ALLOW_DEMO_SEED=true`，并注意它会打印 ⚠️ 横幅、
 清空 30 张表。
 
+#### 干净首启（正式部署推荐）：`SEED_MODE=core`
+
+全新部署不要灌全量演示种子。`prisma/seed.ts` 支持 `SEED_MODE=core`：只建组织、一个真实
+管理员、产品/套餐骨架与签名密钥，**不建**演示账号、客户、授权、激活、Webhook 与日志，
+也就不存在「改名改密才能过启动闸门」这一步：
+
+```bash
+ALLOW_DEMO_SEED=true \
+SEED_MODE=core \
+SEED_CORE_ADMIN_EMAIL=admin@你的域名 \
+SEED_CORE_ADMIN_PASSWORD=<强口令> \
+npm run db:seed
+```
+
+可选变量：`SEED_CORE_ADMIN_NAME`（默认 `Admin`）、`SEED_CORE_ORG_NAME`（默认 `子铭科技有限公司`）、
+`SEED_CORE_ORG_SLUG`（默认 `ziming`）。管理员邮箱不得使用 `@xinglan.dev`、显示名不得使用演示
+显示名、口令必须通过口令策略校验；任一不合规，seed 会在 TRUNCATE 之前直接拒绝执行。
+
 ### 4.3 验证数据
 
 ```bash
