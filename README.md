@@ -36,7 +36,7 @@ npm run db:migrate     # prisma migrate deploy
 npm run db:seed        # 重建演示数据
 ```
 
-> ⚠️ **`npm run db:seed` 是破坏性操作**：`prisma/seed.ts:79` 先对 30 张业务表执行
+> ⚠️ **`npm run db:seed` 是破坏性操作**：`prisma/seed.ts:139` 先对 30 张业务表执行
 > `TRUNCATE ... RESTART IDENTITY CASCADE`，再重灌演示数据——**不是增量，是清空**。
 > 它打的是 `LICENSE_DB_URL` 指向的库，而这个变量的默认值就是本地 `licensing` 库。
 > 如果这台机器上跑着连同一库的服务实例，灌种子会把这些实例的数据一起清掉
@@ -71,6 +71,15 @@ npm run db:seed        # 重建演示数据
 > `serverExternalPackages` 与 `--omit=optional` 实测无效（后者会连带移除 `pg-cloudflare`），不要回头再试。
 > 复现记录与修复前后对比见 [`docs/test-report.md`](docs/test-report.md) 第 1.1 节。
 
+> **正式部署不要灌演示数据**：用干净首启——只建组织、一个真实管理员、签名密钥与
+> 产品/套餐骨架，演示账号/客户/授权/激活一律不建：
+>
+> ```bash
+> SEED_MODE=core SEED_CORE_ADMIN_EMAIL=<管理员邮箱> SEED_CORE_ADMIN_PASSWORD=<强口令> npm run db:seed
+> ```
+>
+> 校验规则与可选变量见 [`docs/DEPLOY-v15.md`](docs/DEPLOY-v15.md) §4.2「干净首启」。
+
 ### 1.3 起服务
 
 ```bash
@@ -86,14 +95,15 @@ npm run dev            # http://localhost:3000
 | `audit@xinglan.dev` | viewer | `License#2026` | 只读（用于验证权限门控） |
 
 组织：星岚软件（时区 `Asia/Shanghai`）。
+（本节账号只存在于全量演示种子；`SEED_MODE=core` 干净首启不建这三个账号，管理员以 `SEED_CORE_ADMIN_EMAIL` 为准。）
 
 ### 1.5 跑测试
 
 ```bash
 npm run typecheck                              # tsc --noEmit
-npm run test                                   # 252 个单元测试（21 个文件）
+npm run test                                   # 269 个单元测试（23 个文件）
 npm run test:installer                         # 108 个安装器单元测试（包内自跑，6 个文件）
-npx vitest run -c vitest.integration.config.ts # 12 个集成测试（需 dev/prod 服务 + 种子数据）
+npx vitest run -c vitest.integration.config.ts # 24 个集成测试（需 dev/prod 服务 + 种子数据）
 npm run e2e                                    # 16 个端到端（自带 next start -p 3001）
 
 # 六语言 SDK 示例联调（Python / Node / PHP / Go / Java / C#，见 sdk-examples/README.md）
@@ -101,8 +111,8 @@ LICENSE_KEY=<授权码> LICENSE_PRODUCT_ID=<产品 UUID> node sdk-examples/verif
 ```
 
 > 上面四个数量都是**实跑值**，口径与复现命令：
-> 单元 `npx vitest run` → `Test Files 22 passed (22) / Tests 302 passed (302)`；
-> 集成 `npx vitest run -c vitest.integration.config.ts` → `Tests 12 passed (12)`（先 `npm run db:seed`，
+> 单元 `npx vitest run` → `Test Files 23 passed (23) / Tests 269 passed (269)`；
+> 集成 `npx vitest run -c vitest.integration.config.ts` → `Tests 24 passed (24)`（先 `npm run db:seed`，
 > 脏库会让并发那条偶发失败）；端到端 `npx playwright test --list` → `Total: 16 tests in 7 files`。
 > 端到端 16 条里有 2 条（`tests/e2e/05-backups.spec.ts` 的「被策略引用的目标不允许直接删除」与
 > 「立即备份 → 完整性校验 → 隔离恢复演练」）依赖库里已存在备份目标/策略，而 `prisma/seed.ts`
@@ -169,7 +179,7 @@ LICENSE_KEY=<授权码> LICENSE_PRODUCT_ID=<产品 UUID> node sdk-examples/verif
    └─ /app/settings/profile          个人设置（资料/改密/MFA）
 ```
 
-共 48 个页面路由、70 个 API 路由、78 个 route handler（含开发者文档与运维端点），
+共 48 个页面路由、71 个 API 路由、79 个 route handler（含开发者文档与运维端点），
 其中备份与灾备占 12 个管理路由、公开协议里含 4 个 v1.5 新增端点
 （`GET /v1/activations/{id}`、`POST /v1/server/licenses/check`、`POST /v1/offline-grants`、`POST /v1/oauth/token`）。
 
@@ -178,8 +188,8 @@ LICENSE_KEY=<授权码> LICENSE_PRODUCT_ID=<产品 UUID> node sdk-examples/verif
 | 数字 | 口径 | 命令 |
 | --- | --- | --- |
 | 48 个页面 | 全部 `page.tsx`：后台 `app/` 26 + 开发者文档 `developers/` 17 + 认证 `(auth)/` 3 + 根重定向 1 + `/openapi` 1（安装器的 `/install` 已随阶段 3 移出） | `find src/app -name 'page.tsx' \| wc -l` |
-| 70 个 API 路由 | `src/app/api/` 下全部 `route.ts`：`api/v1/admin` 54 + `api/v1/auth` 5 + `api/v1` 公开 11（`api/install` 4 个已移出） | `find src/app/api -name 'route.ts' \| wc -l` |
-| 78 个 route handler | 上面 70 + `developers/` 5 个静态文档 route + `/health/live`、`/health/ready`、`/metrics` 3 个 | `find src/app -name 'route.ts' \| wc -l` |
+| 71 个 API 路由 | `src/app/api/` 下全部 `route.ts`：`api/v1/admin` 55 + `api/v1/auth` 5 + `api/v1` 公开 11（`api/install` 4 个已移出） | `find src/app/api -name 'route.ts' \| wc -l` |
+| 79 个 route handler | 上面 71 + `developers/` 5 个静态文档 route + `/health/live`、`/health/ready`、`/metrics` 3 个 | `find src/app -name 'route.ts' \| wc -l` |
 | 12 个备份路由 | `src/app/api/v1/admin/backups/**` | `find src/app/api/v1/admin/backups -name 'route.ts' \| wc -l` |
 
 > 注 1：`/openapi` 是 v1.5 后加的页面（在线契约浏览），早期那一版页面口径只算了
@@ -240,7 +250,7 @@ src/
 ├─ app/
 │  ├─ (auth)/                 登录、忘记密码、重置密码
 │  ├─ app/                    后台（layout 为 AppShell）
-│  └─ api/v1/                 70 个 route handler（安装器那 4 个已随阶段 3 移出，不计入）
+│  └─ api/v1/                 71 个 route handler（安装器那 4 个已随阶段 3 移出，不计入）
 │     ├─ auth/                登录、登出、会话、找回/重置密码
 │     ├─ admin/               管理接口（全部 withAdmin + RBAC）
 │     └─ (根)                 公开客户端接口
@@ -269,9 +279,9 @@ packages/universal-installer/ 通用安装器（阶段 3 拆出：自带 README/
                               不反向 import 授权系统业务模块，只经 host/ 四个耦合文件）
 sdk-examples/                 六语言可运行示例 + verify.mjs（Preview，非已发布 SDK）
 tests/
-├─ unit/                      252 个纯函数与契约测试（21 个文件；安装器另有 108 条在
+├─ unit/                      269 个纯函数与契约测试（23 个文件；安装器另有 108 条在
 │                             packages/universal-installer/tests，用 `npm run test:installer` 跑）
-├─ integration/               12 个真实 HTTP + DB 测试
+├─ integration/               24 个真实 HTTP + DB 测试（12 业务链路 + 12 越权/SSRF 安全回归）
 └─ e2e/                       16 个 Playwright 用例（7 个文件，含 setup）
 docs/                         交付文档（见下）
 ```
@@ -366,3 +376,19 @@ docs/                         交付文档（见下）
   回环（`localhost` / `127.0.0.0/8` / `::1`）与 `https` / `sftp` / `local` 不受影响，非生产环境行为不变。
   放行过的目标写 `audit_logs.action = backup.target_insecure_accepted`，备份设置页显示红色「明文传输」徽章。
   上线前用 `docs/v15-runbook.md` §4.1.1 的 SQL 确认现网没有漏网的明文目标。
+- **越权与 SSRF 回归（阶段 5）**：集成测试新增 12 条安全回归并全过：跨租户读写一律 404 且对方数据不变、
+  viewer 13 个写操作全 403、出站 URL 逐项拒绝（云元数据/私网/CGNAT/链路本地/ULA/`[::1]`/内嵌凭证/
+  非 https/302 跳内网不跟随）、备份路径穿越 6/6 拒绝。回归顺带修掉四个真缺陷：备份目标此前无出站 URL
+  校验、`root_path`/`remote_prefix` 可穿越、开发出站策略放行 `[::1]` 字面量、备份作业重试接口泄漏
+  跨租户存在性（已统一 404）；另补 Webhook 详情 `GET /admin/webhooks/[id]`（组织内）。
+- **安全告警（阶段 6）**：两类事件经统一告警通道（`src/lib/services/alerts.ts`）落 `audit_logs` +
+  结构化日志 + 可选 Webhook（`ALERT_WEBHOOK_URL`，回退 `BACKUP_ALERT_WEBHOOK_URL`），30 分钟去重：
+  `auth.login_bruteforce`（同 IP 10 分钟 ≥10 次登录失败，或同邮箱 10 分钟内 ≥3 个 IP 分布式失败；
+  401 与 429 都计数，否则登录限流的上限会让阈值永远够不着）与 `authz.probing`（同账号/IP 10 分钟
+  ≥20 次管理 API 403 或跨租户 404）。只读查询 `GET /api/v1/admin/security-alerts`（`audit:read`），
+  系统设置页有「最近安全告警」列表；阈值集中在 `SECURITY_ALERT_THRESHOLDS`，计数复用 `rate_limit_buckets`。
+- **CI 门禁与供应链（阶段 7）**：ESLint 0 errors / 50 warnings——其中两条 react-hooks 规则的 44 项
+  历史债降为 warn 并逐项登记在 `ESLINT_DEBT.md`，不许新增；CI 的 lint 已去掉 `continue-on-error`
+  成为真门禁（探针实测能拦下违规）。独立供应链 job 只拦生产依赖的 critical 漏洞
+  （`npm run audit:prod`），dependabot 每周一滚动（小版本合并、major 单独打标）；处置时限
+  （critical 48 小时 / high 一周）与例外登记格式见 `docs/operations.md`、`docs/security-exceptions.md`。

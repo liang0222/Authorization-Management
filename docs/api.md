@@ -1,6 +1,6 @@
 # API 契约
 
-后台前端与客户端 SDK 共用的 HTTP 契约。全部路由在 `src/app/api/v1/`，共 70 个 route handler
+后台前端与客户端 SDK 共用的 HTTP 契约。全部路由在 `src/app/api/v1/`，共 71 个 route handler
 （管理 54 / 认证 5 / 公开协议 11）；
 另有 5 个 `src/app/developers/*` 的静态文档 route（llms / openapi / ai 提示词）与
 `/health/live`、`/health/ready`、`/metrics` 3 个运维端点，全仓 route handler 合计 78 个。
@@ -220,6 +220,7 @@ curl -s "http://127.0.0.1:3100/api/v1/admin/licenses?limit=20&cursor=c1.…" -b 
 | PATCH | `/admin/signing-keys/[id]` | `signingkey:write` | `activate` / `retire` / `revoke` 状态机 |
 | GET/POST | `/admin/webhooks` | `webhook:read` / `webhook:write` | url 仅允许 https 或 localhost；签名密钥只返回一次 |
 | PATCH/DELETE | `/admin/webhooks/[id]` | `webhook:write` | 改 url/事件/状态；DELETE = 归档 |
+| GET | `/admin/webhooks/[id]` | `webhook:read` | 端点详情（组织内；跨组织 404） |
 | GET | `/admin/webhooks/[id]/deliveries` | `webhook:read` | 投递记录 |
 | POST | `/admin/webhook-deliveries/[id]/replay` | `webhook:write` | 重投（接收端需按 `event_id` 幂等） |
 
@@ -236,6 +237,7 @@ Webhook 事件（10 种）：`license.activated`、`license.renewed`、`license.
 | --- | --- | --- | --- |
 | GET | `/admin/verification-logs` | `verification:read` | 分页 + `status`/`productId`/`route`/`q`/`from`/`to`；返回 `summary{totalRequests,successCount,successRate,clientErrorCount,serverErrorCount,avgLatencyMs}` |
 | GET | `/admin/audit-logs` | `audit:read` | 分页 + `action`/`resourceType`/`actorId`/`from`/`to`/`q`；固定 `created_at DESC` |
+| GET | `/admin/security-alerts` | `audit:read` | 最近安全告警只读列表（`auth.login_bruteforce` / `authz.probing`，数据在 `audit_logs`） |
 
 ### 3.8 系统管理
 
